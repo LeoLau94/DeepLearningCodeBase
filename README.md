@@ -1,7 +1,9 @@
 # DeepLearningCodeBase
 
 **Based on Pytorch0.4.0**
+
 **It is mainly used to implement pruning research for now**
+
 **However, we will try to make it more general to handel different jobs such as Object Detection, Semantic Segmentation and so on. \(such a long way to go\)**
 
 #Content
