@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from torchvision import transforms
 from utils.trainer import *
 from nets.my_vgg import vgg_diy
 from nets.resnet_pre_activation import *
@@ -51,42 +50,86 @@ else:
 # dataset choice
 kwargs = {'num_workers': args.num_workers,
           'pin_memory': True} if args.cuda else {}
-
-# normalize config
 '''
-    cifar10 normalize
+if args.dataset == 'cifar10':
     normalize = transforms.Normalize(
-      mean=[0.491, 0.482, 0.447],
-      std=[0.247, 0.243, 0.262])
-    
-    cifar100 normalize
+        mean=[0.491, 0.482, 0.447],
+        std=[0.247, 0.243, 0.262])
+    train_loader = torch.utils.data.DataLoader(
+         datasets.CIFAR10('./data', train=True, download=False,
+                          transform=transforms.Compose([
+                              transforms.RandomCrop(32, padding=4),
+                              transforms.RandomHorizontalFlip(),
+                              #transforms.ColorJitter(brightness=1),
+                              transforms.ToTensor(),
+                              normalize
+                              ])
+                          ), batch_size=args.batch_size, shuffle=True, **kwargs
+         )
+    validate_loader = torch.utils.data.DataLoader(
+         datasets.CIFAR10('./data', train=False,
+                          transform=transforms.Compose([
+                              transforms.ToTensor(),
+                              normalize
+                              ])
+                          ),
+         batch_size=args.validate_batch_size, shuffle=False, **kwargs
+         )
+elif args.dataset == 'cifar100':
     normalize = transforms.Normalize(
         mean=[0.507, 0.487, 0.441],
         std=[0.267, 0.256, 0.276])
-
-    or customize by ueser
-    ...
-
-''' 
-normalize = transforms.Normalize(
-  mean=[0.491, 0.482, 0.447],
-  std=[0.247, 0.243, 0.262])
-
-# tansform config
+    # normalize = transforms.Normalize(mean=[.5,.5,.5], std=[.5,.5,.5])
+    # normalize = transforms.Normalize((.5,.5,.5),(.5,.5,.5))
+    train_loader = torch.utils.data.DataLoader(
+         datasets.CIFAR100('./data', train=True, download=True,
+                           transform=transforms.Compose([
+                               transforms.RandomCrop(32, padding=4),
+                               transforms.RandomHorizontalFlip(),
+                               transforms.ToTensor(),
+                               normalize
+                               ])
+                           ), batch_size=args.batch_size, shuffle=True, **kwargs
+         )
+    validate_loader = torch.utils.data.DataLoader(
+         datasets.CIFAR100('./data', train=False,
+                           transform=transforms.Compose([
+                               transforms.ToTensor(),
+                               normalize
+                               ])
+                           ),
+         batch_size=args.validate_batch_size, shuffle=False, **kwargs
+         )
+else:
+    train_loader = torch.utils.data.DataLoader(
+         ImageList(root=args.image_root_path, fileList=args.image_train_list,
+                   transform=transforms.Compose([
+                       transforms.Resize(size=(args.img_size, args.img_size)),
+                       transforms.RandomCrop(args.crop_size),
+                       transforms.RandomHorizontalFlip(),
+                       transforms.ToTensor(),
+                   ])
+                   ),
+         batch_size=args.batch_size, shuffle=True, **kwargs
+         )
+    validate_loader = torch.utils.data.DataLoader(
+        ImageList(
+            root=args.image_root_path, fileList=args.image_validate_list,
+            transform=transforms.Compose(
+                [transforms.Resize(
+                     size=(args.crop_size, args.crop_size)),
+                 transforms.ToTensor(), 
+                 ])
+            ),
+        batch_size=args.validate_batch_size, shuffle=False, **kwargs
+        )
 '''
-    customize by ueser
-'''
-c_transform = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=1),
-    transforms.ToTensor(),
-    normalize
-  ])
 
 test_path       = '/home/leolau/pytorch/data' #just for test, when parameter confirm this might delete
-train_loader, validate_loader = dataset_factory.get_train_loader_and_validate_loader(args.dataset, c_transform, args.batch_size, args.validate_batch_size,
-                                                                        kwargs, root_path=test_path)
+dataset_f       = dataset_factory(args.dataset,args.batch_size,args.validate_batch_size,kwargs,root_path=test_path)
+train_loader    = dataset_f.train_loader
+validate_loader = dataset_f.validate_loader
+
 optimizer = optim.SGD(
    filter(
        lambda p: p.requires_grad,
