@@ -1,5 +1,5 @@
 import torch.utils.data as data
-from torchvision.transforms import ToTensor
+import torchvision.transforms as transforms
 from PIL import Image
 import os
 import os.path
@@ -49,8 +49,8 @@ class ImageList(data.Dataset):
 
     def __init__(
         self,
-        root,
-        fileList,
+        root=None,
+        fileList=None,
         transform=None,
         list_reader=default_list_reader,
      loader=default_loader):
@@ -63,10 +63,11 @@ class ImageList(data.Dataset):
         imgPath, target = self.imgList[index]
         img = self.loader(os.path.join(self.root, imgPath))
 
-        if self.transform is not None:
-            img = self.transform(img)
+        if self.transform is None:
+            self.transform = transforms.Compose([transforms.ToTensor()])
         else:
-            img = ToTensor(img)
+            pass
+        img = self.transform(img)
         return img, target
 
     def __len__(self):
@@ -76,16 +77,17 @@ class ImageList(data.Dataset):
 # Author: GuoJie Liu
 class CelebADataset(ImageList):
 
-    def __init__(self, attr_reader=default_attr_reader, attrlist=[], **kwargs):
+    def __init__(self, attr_reader=default_attr_reader, attrList=[], **kwargs):
         super(CelebADataset, self).__init__(**kwargs)
-        self.attr = attr_reader(attrlist)
+        self.attr = attr_reader(attrList)
 
     def __getitem__(self, index):
         imgPath, target = self.imgList[index]
         img = self.loader(os.path.join(self.root, imgPath))
         img_attr = self.attr[imgPath]
-        if self.transform is not None:
-            img = self.transform(img)
+        if self.transform is None:
+            self.transform = transforms.Compose([transforms.ToTensor()])
         else:
-            img = ToTensor(img)
+            pass
+        img = self.transform(img)
         return img, target, img_attr
