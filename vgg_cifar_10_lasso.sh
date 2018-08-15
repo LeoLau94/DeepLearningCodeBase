@@ -4,7 +4,7 @@
 ###   Configure path   ###
 ##########################
 
-SAVE_PATH=/home/leolau/pytorch/save/
+SAVE_PATH=/data/leolau/models/save/
 
 
 ############################
@@ -26,7 +26,7 @@ PENALTY=0.0001
 WD=0.0001
 NUM_WORKER=2
 
-CUDA_VISIBLE_DEVICES=2 python main.py \
+CUDA_VISIBLE_DEVICES=4 python main.py \
   --save-path=${SAVE_PATH} \
   --model=$MODEL  \
   --num_classes=$NUM_CLASSES \

@@ -6,13 +6,14 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 import torch.backends.cudnn as cudnn
+from tensorboardX import SummaryWriter
 from utils.trainer import *
 from nets.my_vgg import vgg_diy
-#from nets.varying_bn_vgg import vgg_varyingBN
 from nets.resnet_pre_activation import *
-from nets.se_resnet import *
-from utils.load_imglist import ImageList
 from utils.convert_DataParallel_Model import convert_DataParallel_Model_to_Common_Model
+from utils.getClassesFromOfficialDataset import cifar_load_meta
+from datetime import datetime
+current_time = datetime.now().strftime('%b%d_%H-%M-%S')
 
 
 # Training settings
@@ -100,7 +101,6 @@ cudnn.benchmark = True
 model_dict = {
     'vgg': vgg_diy,
     'resnet': preactivation_resnet164,
-    'se_resnet': se_resnet_34
 }
 
 
@@ -118,7 +118,7 @@ else:
             teacher_model.load_state_dict(torch.load(args.teacher_model))
         else:
             pass
-        #model = model_dict[args.model](num_classes=args.num_classes)
+        # model = model_dict[args.model](num_classes=args.num_classes)
         # model.load_state_dict(load_pkl)
         args.save_path = os.path.join(
             args.save_path,
@@ -131,76 +131,99 @@ else:
 
 kwargs = {'num_workers': args.num_workers,
           'pin_memory': True} if args.cuda else {}
+
+dataset_root = '/data/torchvision/'
 if args.dataset == 'cifar10':
     normalize = transforms.Normalize(
         mean=[0.491, 0.482, 0.447],
         std=[0.247, 0.243, 0.262])
+
+    base_folder = 'cifar-10-batches-py'
+
+    train_dataset = datasets.CIFAR10(dataset_root, train=True, download=True,
+                                     transform=transforms.Compose([
+                                         transforms.RandomCrop(32, padding=4),
+                                         transforms.RandomHorizontalFlip(),
+                                         # transforms.ColorJitter(brightness=1),
+                                         transforms.ToTensor(),
+                                         normalize
+                                         ]))
+    validate_dataset = datasets.CIFAR10(dataset_root, train=False,
+                                        transform=transforms.Compose([
+                                            transforms.ToTensor(),
+                                            normalize
+                                            ]))
+
+    train_dataset.classes = cifar_load_meta(
+        dataset_root, base_folder, args.dataset)
+
     train_loader = torch.utils.data.DataLoader(
-         datasets.CIFAR10('./data', train=True, download=False,
-                          transform=transforms.Compose([
-                              transforms.RandomCrop(32, padding=4),
-                              transforms.RandomHorizontalFlip(),
-                              #transforms.ColorJitter(brightness=1),
-                              transforms.ToTensor(),
-                              normalize
-                              ])
-                          ), batch_size=args.batch_size, shuffle=True, **kwargs
-         )
+        dataset=train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+     **kwargs)
     validate_loader = torch.utils.data.DataLoader(
-         datasets.CIFAR10('./data', train=False,
-                          transform=transforms.Compose([
-                              transforms.ToTensor(),
-                              normalize
-                              ])
-                          ),
+         dataset=validate_dataset,
          batch_size=args.validate_batch_size, shuffle=False, **kwargs
          )
 elif args.dataset == 'cifar100':
     normalize = transforms.Normalize(
         mean=[0.507, 0.487, 0.441],
         std=[0.267, 0.256, 0.276])
+
+    base_folder = 'cifar-100-python'
+
+    train_dataset = datasets.CIFAR100(
+        dataset_root, train=True, download=True,
+        transform=transforms.Compose(
+            [transforms.RandomCrop(32, padding=4),
+             transforms.RandomHorizontalFlip(),
+             transforms.ToTensor(),
+             normalize]))
+    validate_dataset = datasets.CIFAR100(dataset_root, train=False,
+                                         transform=transforms.Compose([
+                                             transforms.ToTensor(),
+                                             normalize
+                                             ])
+                                         )
+
+    train_dataset.classes = cifar_load_meta(
+        dataset_root, base_folder, args.dataset)
     # normalize = transforms.Normalize(mean=[.5,.5,.5], std=[.5,.5,.5])
     # normalize = transforms.Normalize((.5,.5,.5),(.5,.5,.5))
     train_loader = torch.utils.data.DataLoader(
-         datasets.CIFAR100('./data', train=True, download=True,
-                           transform=transforms.Compose([
-                               transforms.RandomCrop(32, padding=4),
-                               transforms.RandomHorizontalFlip(),
-                               transforms.ToTensor(),
-                               normalize
-                               ])
-                           ), batch_size=args.batch_size, shuffle=True, **kwargs
-         )
+        dataset=train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+     **kwargs)
     validate_loader = torch.utils.data.DataLoader(
-         datasets.CIFAR100('./data', train=False,
-                           transform=transforms.Compose([
-                               transforms.ToTensor(),
-                               normalize
-                               ])
-                           ),
+         dataset=validate_dataset,
          batch_size=args.validate_batch_size, shuffle=False, **kwargs
          )
 else:
-    train_loader = torch.utils.data.DataLoader(
-         ImageList(root=args.image_root_path, fileList=args.image_train_list,
-                   transform=transforms.Compose([
-                       transforms.Resize(size=(args.img_size, args.img_size)),
-                       transforms.RandomCrop(args.crop_size),
-                       transforms.RandomHorizontalFlip(),
-                       transforms.ToTensor(),
-                   ])
-                   ),
-         batch_size=args.batch_size, shuffle=True, **kwargs
-         )
-    validate_loader = torch.utils.data.DataLoader(
-        ImageList(
-            root=args.image_root_path, fileList=args.image_validate_list,
-            transform=transforms.Compose(
-                [transforms.Resize(
-                     size=(args.crop_size, args.crop_size)),
-                 transforms.ToTensor(), ])),
-        batch_size=args.validate_batch_size, shuffle=False, **kwargs)
-
+    pass
+#    train_loader = torch.utils.data.DataLoader(
+#         ImageList(root=args.image_root_path, fileList=args.image_train_list,
+#                   transform=transforms.Compose([
+#                       transforms.Resize(size=(args.img_size, args.img_size)),
+#                       transforms.RandomCrop(args.crop_size),
+#                       transforms.RandomHorizontalFlip(),
+#                       transforms.ToTensor(),
+#                   ])
+#                   ),
+#         batch_size=args.batch_size, shuffle=True, **kwargs
+#         )
+#    validate_loader = torch.utils.data.DataLoader(
+#        ImageList(
+#            root=args.image_root_path, fileList=args.image_validate_list,
+#            transform=transforms.Compose(
+#                [transforms.Resize(
+#                     size=(args.crop_size, args.crop_size)),
+#                 transforms.ToTensor(), ])),
+#        batch_size=args.validate_batch_size, shuffle=False, **kwargs)
+#
+writer = SummaryWriter(log_dir=os.path.join(
+    'runs', '|'.join([current_time, args.model, args.dataset])))
 
 optimizer = optim.SGD(
    filter(
@@ -233,22 +256,7 @@ if args.sr:
          validate_loader=validate_loader,
          root=args.save_path,
          penalty=args.p,
-         )
-elif args.se:
-    print('\nSE_ResNet Training \n')
-    trainer = SE_Trainer(
-         model=model,
-         optimizer=optimizer,
-         lr=args.lr,
-         criterion=criterion,
-         start_epoch=args.start_epoch,
-         epochs=args.epochs,
-         cuda=args.cuda,
-         log_interval=args.log_interval,
-         train_loader=train_loader,
-         validate_loader=validate_loader,
-         root=args.save_path,
-         SEBlock=SEBlock
+         writer=writer
          )
 
 elif args.fine_tune is not None and args.teacher_model is not None:
@@ -268,6 +276,7 @@ elif args.fine_tune is not None and args.teacher_model is not None:
         root=args.save_path,
         loss_ratio=args.loss_ratio,
         transfer_criterion=transfer_criterion,
+        writer=writer,
 
          )
 
@@ -285,6 +294,7 @@ else:
          train_loader=train_loader,
          validate_loader=validate_loader,
          root=args.save_path,
+         writer=writer,
 
          )
 trainer.start()
