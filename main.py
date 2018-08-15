@@ -7,11 +7,11 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
-from utils.trainer import *
+from utils import *
 from nets.my_vgg import vgg_diy
 from nets.resnet_pre_activation import *
-from utils.convert_DataParallel_Model import convert_DataParallel_Model_to_Common_Model
-from utils.getClassesFromOfficialDataset import cifar_load_meta
+# from utils.convert_DataParallel_Model import convert_DataParallel_Model_to_Common_Model
+# from utils.getClassesFromOfficialDataset import cifar_load_meta
 from datetime import datetime
 current_time = datetime.now().strftime('%b%d_%H-%M-%S')
 
@@ -184,8 +184,7 @@ elif args.dataset == 'cifar100':
                                          transform=transforms.Compose([
                                              transforms.ToTensor(),
                                              normalize
-                                             ])
-                                         )
+                                             ]))
 
     train_dataset.classes = cifar_load_meta(
         dataset_root, base_folder, args.dataset)
