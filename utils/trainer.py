@@ -1,33 +1,30 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
+# import torch.optim as optim
 from torch.autograd import Variable
-from torch.nn import functional as F
+# from torch.nn import functional as F
 from torch.optim import lr_scheduler
-#import shutil
-from nets.varying_bn_vgg import VaryingBN1d, VaryingBN2d
 import os
 import time
-from tensorboardX import SummaryWriter
 import math
-#import numpy as np
-#from scipy.integrate import quad
-#from scipy import stats
-#from numpy import pi, e, sqrt
-#from numpy import vectorize
-#from numba import float32, cfunc
+from datetime import datetime
+# import numpy as np
+# from scipy.integrate import quad
+# from scipy import stats
+# from numpy import pi, e, sqrt
+# from numpy import vectorize
+# from numba import float32, cfunc
 
 import sys
 sys.path.append('/home/leolau/pytorch/')
 #from utils.vary_batchnorm import *
-from nets.my_vgg import *
+#from nets.my_vgg import *
 
 __all__ = [
     'Trainer',
     'Network_Slimming_Trainer',
-    'SE_Trainer',
     'KD_FineTuning_Trainer',
-    'Varying_BN_Trainer']
+    ]
 
 
 class AverageMeter(object):
@@ -39,17 +36,24 @@ class AverageMeter(object):
     def reset(self):
         self.val = 0
         self.avg = 0
-        self.sum = 0
         self.count = 0
+        self.total = 0
 
-    def update(self, val, n=1):
+    def updateWithVal(self, val, delta):
         self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
+        self.count += val * delta
+        self.total += delta
+        self.avg = self.count / self.total
+
+    def updateWithCount(self, count=1, delta=1):
+        self.count += count
+        self.total += delta
+        self.total = 1 if self.total == 0 else self.total
+        self.avg = self.count / self.total
 
 
 class VaryingBNlrClipper(object):
+
     def __init__(self, penalty_range):
         self.penalty_range = penalty_range
 
@@ -60,7 +64,9 @@ class VaryingBNlrClipper(object):
 
 
 class Trainer:
+
     def __init__(self, **kwargs):
+        kwargs.setdefault('topk', None)
         self.model = kwargs['model']
         self.optimizer = kwargs['optimizer']
         self.lr = kwargs['lr']
@@ -72,8 +78,16 @@ class Trainer:
         self.train_loader = kwargs['train_loader']
         self.validate_loader = kwargs['validate_loader']
         self.root = kwargs['root']
+        self.classes = self.train_loader.dataset.classes
+        if kwargs['topk'] is not None:
+            self.topk = kwargs['topk']
+        else:
+            if len(self.classes) > 5:
+                self.topk = (1, 5)
+            else:
+                self.topk = (1,)
 
-        self.writer = SummaryWriter()
+        self.writer = kwargs['writer']
         self.scheduler = lr_scheduler.MultiStepLR(
             self.optimizer, milestones=[
                 self.epochs * 0.5, self.epochs * 0.75], gamma=0.1)
@@ -82,8 +96,8 @@ class Trainer:
         self.model.train()
 
         losses = AverageMeter()
-        top1 = AverageMeter()
-        top5 = AverageMeter()
+        topAcc = [AverageMeter() for i in self.topk]
+        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
 
         for batch_idx, (data, label) in enumerate(self.train_loader):
@@ -91,51 +105,61 @@ class Trainer:
 
             if self.cuda:
                 data, label = data.cuda(), label.cuda(async=True)
-            data, label = Variable(data), Variable(label)
 
             output = self.model(data)
             loss = self.criterion(output, label)
-            prec1, prec5 = self.accuracy(output.data, label.data, topk=(1, 5))
-            losses.update(loss.data[0], data.size(0))
-            top1.update(prec1[0], data.size(0))
-            top5.update(prec5[0], data.size(0))
+            prec = self.accuracy(output.data, label.data, topk=self.topk)
+            classes_count, classes_total = self.classes_accuracy(
+                output.data, label.data)
+
+            losses.updateWithVal(loss.data[0], data.size(0))
+            for i, _ in enumerate(self.topk):
+                topAcc[i].updateWithVal(prec[i], data.size(0))
+            for i, _ in enumerate(self.classes):
+                classesAcc[i].updateWithCount(
+                    classes_count[i].item(),
+                    classes_total[i].item())
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
-                print('Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.6f}\t'
-                      'Top1_Acc: {top1.val:.2f}%\t'
-                      'Top5_Acc: {top5.val:.2f}%'
+                current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
+                print('=======================================')
+                print('{}\t Epoch: {} [{}/{}]\t'
+                      'Loss: {loss.avg:.6f}\t'
                       .format(
+                        current_time,
                         e,
                         (batch_idx + 1) * len(data),
                         len(self.train_loader.dataset),
                         loss=losses,
-                        top1=top1,
-                        top5=top5,
                           ))
+                print('------------Topk Accuracy--------------')
+                log = ''
+                for i, k in enumerate(self.topk):
+                    log += 'Top {} Acc:{Acc.avg:2f}%\t'.format(k, Acc=topAcc[i])
+                print(log)
+                # print('------------Class Accuracy--------------')
+                # for i, c in enumerate(self.classes):
+                #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
                 lr = iter(self.optimizer.param_groups).__next__()['lr']
-                print('Learning_Rate:{}'.format(lr))
-                losses.reset()
-                top1.reset()
-                top5.reset()
+                print('LearningRate:{}'.format(lr))
+
         print(
             'Training time (for an epoch) :{}'.format(
                 time.time() -
                 time_stamp))
-        return losses.avg
+
+        return topAcc, classesAcc, losses.avg
 
     def validate(self):
         self.model.eval()
 
-        # batch_time = AverageMeter()
-        # data_time = AverageMeter()
         losses = AverageMeter()
-        top1 = AverageMeter()
-        top5 = AverageMeter()
+        topAcc = [AverageMeter() for i in self.topk]
+        classesAcc = [AverageMeter() for c in self.classes]
 
         time_stamp = time.time()
         for data, label in self.validate_loader:
@@ -145,22 +169,38 @@ class Trainer:
                 output = self.model(data)
                 loss = self.criterion(output, label)
 
-            prec1, prec5 = self.accuracy(output.data, label.data, topk=(1, 5))
-            losses.update(loss.data[0], data.size(0))
-            top1.update(prec1[0], data.size(0))
-            top5.update(prec5[0], data.size(0))
+            prec = self.accuracy(output.data, label.data, topk=self.topk)
+            classes_count, classes_total = self.classes_accuracy(
+                output.data, label.data)
 
-        print('\n Validate_Avg_Loss: {loss.avg:.4f},\t'
-              'Top1_Acc: {top1.avg:.2f}%\t'
-              'Top5_Acc: {top5.avg:.2f}%\t'
+            losses.updateWithVal(loss.data[0], data.size(0))
+            for i, _ in enumerate(self.topk):
+                topAcc[i].updateWithVal(prec[i], data.size(0))
+            for i, _ in enumerate(self.classes):
+                classesAcc[i].updateWithCount(
+                    classes_count[i].item(),
+                    classes_total[i].item())
+
+        print('=======================================')
+        current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
+        print('\n{}\t Validate_Avg_Loss: {loss.avg:.4f},\t'
               'Time: {:.4f}s\n'
               .format(
+                  current_time,
                   time.time() - time_stamp,
                   loss=losses,
-                  top1=top1,
-                  top5=top5,
               ))
-        return top1.avg, top5.avg, losses.avg
+
+        print('------------Topk Accuracy--------------')
+        log = ''
+        for i, k in enumerate(self.topk):
+            log += 'Top {} Acc:{Acc.avg:2f}\t'.format(k, Acc=topAcc[i])
+        print(log)
+        # print('------------Class Accuracy--------------')
+        # for i, c in enumerate(self.classes):
+        #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
+
+        return topAcc, classesAcc, losses.avg
 
     def start(self):
 
@@ -169,40 +209,52 @@ class Trainer:
         print(self.model)
         if self.cuda:
             self.model.cuda()
-            #self.model = nn.DataParallel(self.model)
-            print("Using GPU: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
-        print('-----Start Training-----\n')
+            #self.model = nn.dataparallel(self.model)
+            print("using gpu: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
+        print('-----start training-----\n')
         best_precision = 0
         for e in range(self.start_epoch, self.epochs):
             self.scheduler.step()
-            train_loss = self.train(e)
+            train_topk_acc, train_class_acc, train_loss = self.train(e)
 
             bn_idx = 0
-            bn_im = []
             for m in self.model.modules():
                 if isinstance(
                         m, nn.BatchNorm2d) or isinstance(
                         m, nn.BatchNorm1d):
                     self.writer.add_histogram(
-                        'BN'+str(bn_idx) + 'gamma', m.weight.data.cpu().numpy(), e)
+                        'bn'+str(bn_idx) + 'gamma', m.weight.data.cpu().numpy(), e)
                     self.writer.add_histogram(
-                        'BN'+str(bn_idx) + 'beta', m.bias.data.cpu().numpy(), e)
+                        'bn'+str(bn_idx) + 'beta', m.bias.data.cpu().numpy(), e)
 
                     bn_idx += 1
 
-            prec1, prec5, validate_loss = self.validate()
+            validate_topk_acc, validate_class_acc, validate_loss = self.validate()
 
             # self.writer.add_scalar('/data/entropy',self.get_all_gamma_entropy(),e)
-            self.writer.add_scalar('data/train_loss', train_loss, e)
-            self.writer.add_scalar('data/validate_loss', validate_loss, e)
-            self.writer.add_scalar('data/validate_top1_acc', prec1, e)
-            self.writer.add_scalar('data/validate_top5_acc', prec5, e)
+            LOSS = {'train': train_loss, 'validate': validate_loss}
+            trainTopk = {}
+            validateTopk = {}
+            trainClasses = {}
+            validateClasses = {}
+            for i, k in enumerate(self.topk):
+                trainTopk['Top%s' % k] = train_topk_acc[i].avg
+                validateTopk['Top%s' % k] = validate_topk_acc[i].avg
+            for i, c in enumerate(self.classes):
+                trainClasses['%s' % c] = train_class_acc[i].avg
+                validateClasses['%s' % c] = validate_class_acc[i].avg
 
-            is_best = prec1 > best_precision
+            self.writer.add_scalars('Loss', LOSS, e)
+            self.writer.add_scalars('Topk_Accuracy/Training', trainTopk, e)
+            self.writer.add_scalars('Topk_Accuracy/Validation', validateTopk, e)
+            self.writer.add_scalars(
+                'Classes_Accuracy/Training', trainClasses, e)
+            self.writer.add_scalars(
+                'Classes_Accuracy/Validation', validateClasses, e)
+
+            is_best = validate_topk_acc[0].avg > best_precision
             training_state = {
                 'start_epoch': e,
-                'precision@1': prec1,
-                'precision@5': prec5,
             }
             self.save_checkpoint(
                 training_state,
@@ -217,8 +269,6 @@ class Trainer:
             'cuda': self.cuda,
             'start_epoch': training_state['start_epoch'] + 1,
             'epochs': self.epochs,
-            'precision@1': training_state['precision@1'],
-            'precision@5': training_state['precision@5'],
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
         }
@@ -250,15 +300,6 @@ class Trainer:
         else:
             print('Failed to resume')
 
-    def get_all_gamma_entropy(self):
-        sum = 0
-        for m in self.model.modules():
-            if isinstance(m, nn.BatchNorm2d):
-                # print(m.weight.data.shape)
-                prob_w = F.softmax(torch.abs(m.weight))
-                sum += torch.sum(-prob_w*torch.log(prob_w))
-        return sum
-
     def accuracy(self, output, target, topk=(1,)):
         maxk = max(topk)
         batch_size = target.size(0)
@@ -273,6 +314,31 @@ class Trainer:
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+    def classes_accuracy(self, output, target):
+
+        classes_total = torch.zeros(len(self.classes))
+        classes_count = torch.zeros(len(self.classes))
+
+        target_idx = target.view(-1).to(torch.int)
+        for idx in target_idx:
+            classes_total[idx] += 1
+
+        _, pred = output.topk(1, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+        classes_idx = pred.masked_select(correct).to(torch.int)
+
+        for idx in classes_idx:
+            classes_count[idx] += 1
+
+       #  avoid_zero_classes_total = classes_total.clone()
+       #  azct_np = avoid_zero_classes_total.numpy()
+       #  azct_np[azct_np == 0] = 1
+
+       #  res = torch.mul(classes_count, 100).div_(avoid_zero_classes_total)
+
+        return classes_count.to(torch.int), classes_total.to(torch.int)
+
     def adjust_lr_cosine(self, epoch, batch, nBatch):
         T_total = self.epochs * nBatch
         T_cur = (epoch % self.epochs) * nBatch + batch
@@ -283,6 +349,7 @@ class Trainer:
 
 
 class Network_Slimming_Trainer(Trainer):
+
     def __init__(self, **kwargs):
         super(Network_Slimming_Trainer, self).__init__(**kwargs)
         self.penalty = kwargs['penalty']
@@ -298,123 +365,70 @@ class Network_Slimming_Trainer(Trainer):
         self.model.train()
 
         losses = AverageMeter()
-        top1 = AverageMeter()
-        top5 = AverageMeter()
-
-        # self.MultiStepLR(e)
+        topAcc = [AverageMeter() for i in self.topk]
+        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
+
         for batch_idx, (data, label) in enumerate(self.train_loader):
+            # lr = self.adjust_lr_cosine(e,batch_idx,len(self.train_loader))
+
             if self.cuda:
                 data, label = data.cuda(), label.cuda(async=True)
-            data, label = Variable(data), Variable(label)
 
             output = self.model(data)
-            loss = self.criterion(output, label)# * self.l1_penalty()
+            loss = self.criterion(output, label)
+            prec = self.accuracy(output.data, label.data, topk=self.topk)
+            classes_count, classes_total = self.classes_accuracy(
+                output.data, label.data)
 
-            prec1, prec5 = self.accuracy(output.data, label.data, topk=(1, 5))
-            losses.update(loss.data[0], data.size(0))
-            top1.update(prec1[0], data.size(0))
-            top5.update(prec5[0], data.size(0))
+            losses.updateWithVal(loss.data[0], data.size(0))
+            for i, _ in enumerate(self.topk):
+                topAcc[i].updateWithVal(prec[i], data.size(0))
+            for i, _ in enumerate(self.classes):
+                classesAcc[i].updateWithCount(
+                    classes_count[i].item(),
+                    classes_total[i].item())
 
-            lr = iter(self.optimizer.param_groups).__next__()['lr']
             self.optimizer.zero_grad()
             loss.backward()
-            # self.DLASSO_update()
             self.updateBN()
             self.optimizer.step()
-            #self.model.apply(self.clipper.__call__)
-            # self.Fast_ISTA_update(lr)
 
             if (batch_idx + 1) % self.log_interval == 0:
-                print('Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.3f}\t'
-                      'Top1_Acc: {top1.val:.2f}%\t'
-                      'Top5_Acc: {top5.val:.2f}%'
+                current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
+                print('=======================================')
+                print('{}\t Epoch: {} [{}/{}]\t'
+                      'Loss: {loss.avg:.6f}\t'
                       .format(
+                        current_time,
                         e,
                         (batch_idx + 1) * len(data),
                         len(self.train_loader.dataset),
                         loss=losses,
-                        top1=top1,
-                        top5=top5,
                           ))
+                print('------------Topk Accuracy--------------')
+                log = ''
+                for i, k in enumerate(self.topk):
+                    log += 'Top {} Acc:{Acc.avg:2f}%\t'.format(k, Acc=topAcc[i])
+                print(log)
+                # print('------------Class Accuracy--------------')
+                # for i, c in enumerate(self.classes):
+                #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
+                lr = iter(self.optimizer.param_groups).__next__()['lr']
+                print('LearningRate:{}'.format(lr))
 
-           #     print(
-           #         'Regularization Loss:{}'.format(
-           #             self.regularization_loss()))
-
-                print('Learning_Rate:{}'.format(lr))
-                losses.reset()
-                top1.reset()
-                top5.reset()
         print(
             'Training time (for an epoch) :{}'.format(
                 time.time() -
                 time_stamp))
 
-        return losses.avg
-
-    def start(self):
-
-        if not os.path.exists(self.root):
-            os.makedirs(self.root)
-        print(self.model)
-        if self.cuda:
-            self.model.cuda()
-            #self.model = nn.DataParallel(self.model)
-            print("Using GPU: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
-        print('-----Start Training-----\n')
-        best_precision = 0
-        #scale_factor = 1
-        # self.scale_BN_Conv(scale_factor)
-        for e in range(self.start_epoch, self.epochs):
-            self.scheduler.step()
-            train_loss = self.train(e)
-
-            bn_idx = 0
-            bn_im = []
-            for m in self.model.modules():
-                if isinstance(
-                        m, nn.BatchNorm1d) or isinstance(
-                        m, nn.BatchNorm2d):
-                    self.writer.add_histogram(
-                        'BN'+str(bn_idx) + 'gamma', m.weight.data.cpu().numpy(), e)
-                    self.writer.add_histogram(
-                        'BN'+str(bn_idx) + 'beta', m.bias.data.cpu().numpy(), e)
-#                    self.writer.add_histogram(
-#                        'BN' + str(bn_idx) + 'learning_rate', m.lr.data.cpu().numpy(), e)
-
-                    bn_idx += 1
-
-            prec1, prec5, validate_loss = self.validate()
-
-            # self.writer.add_scalar('/data/entropy',self.get_all_gamma_entropy(),e)
-            self.writer.add_scalar('data/train_loss', train_loss, e)
-            self.writer.add_scalar('data/validate_loss', validate_loss, e)
-            self.writer.add_scalar('data/validate_top1_acc', prec1, e)
-            self.writer.add_scalar('data/validate_top5_acc', prec5, e)
-            # self.scale_BN_Conv(1 / scale_factor)
-            is_best = prec1 > best_precision
-            training_state = {
-                'start_epoch': e,
-                'precision@1': prec1,
-                'precision@5': prec5,
-            }
-            # self.scale_BN_Conv(scale_factor)
-            self.save_checkpoint(
-                training_state,
-                is_best
-                )
-
-        print("-----Training Completed-----\n")
-        self.writer.export_scalars_to_json("./all_scalars.json")
-        self.writer.close()
+        return topAcc, classesAcc, losses.avg
 
     def updateBN(self):
         for m in self.model.modules():
             if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
                 m.weight.grad.data.add_(self.penalty*torch.sign(m.weight.data))
-                #m.bias.grad.data.add_(self.penalty*torch.sign(m.bias.data))
+                # m.bias.grad.data.add_(self.penalty*torch.sign(m.bias.data))
 
     def l1_penalty(self):
         bn_l1_norm_all = 0
@@ -431,7 +445,7 @@ class Network_Slimming_Trainer(Trainer):
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = self.lr
 
-    def quad_express(self, t):
+    def quad_express(self, t, e):
         return self.const_div * pow(e, -t**2)
 
     # nb_quad_express = cfunc("float32(float32)")(quad_express)
@@ -528,7 +542,7 @@ class Network_Slimming_Trainer(Trainer):
             requires_grad=True)
         init_hooks(self.model)
         self.model.eval()
-        output = self.model(input_data)
+        self.model(input_data)
 
         for idx, pre_size in enumerate(conv_layer_pre_kernel_size[:-1]):
             subsequent_layers_cost = sum([post_size
@@ -570,132 +584,8 @@ class Network_Slimming_Trainer(Trainer):
         return total_loss
 
 
-class Varying_BN_Trainer(Trainer):
-    def __init__(self, **kwargs):
-        super(Varying_BN_Trainer, self).__init__(**kwargs)
-        self.penalty = kwargs['penalty']
-        self.root = os.path.join(self.root, 'varying_BN')
-
-    def start(self):
-
-        if not os.path.exists(self.root):
-            os.makedirs(self.root)
-        print(self.model)
-        if self.cuda:
-            print("Using GPU: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
-        print('-----Start Training-----\n')
-        best_precision = 0
-        for e in range(self.start_epoch, self.epochs):
-            self.scheduler.step()
-            train_loss = self.train(e)
-
-            self.optimizer.zero_grad()
-            self.updateBN()
-            self.optimizer.step()
-
-            bn_idx = 0
-            for m in self.model.modules():
-                # print(type(m))
-                # print(Varying_BatchNorm2D)
-                if isinstance(
-                        m, Varying_BatchNorm2D) or isinstance(
-                        m, Varying_BatchNorm1D):
-                    # print(bn_idx)
-                    self.writer.add_histogram(
-                        'BN'+str(bn_idx), m.weight.data.cpu().numpy(), e)
-                    bn_idx += 1
-
-            prec1, prec5, validate_loss = self.validate()
-
-            # self.writer.add_scalar('/data/entropy',self.get_all_gamma_entropy(),e)
-            self.writer.add_scalar('data/train_loss', train_loss, e)
-            self.writer.add_scalar('data/validate_loss', validate_loss, e)
-            self.writer.add_scalar('data/validate_top1_acc', prec1, e)
-            self.writer.add_scalar('data/validate_top5_acc', prec5, e)
-
-            is_best = prec1 > best_precision
-            training_state = {
-                'start_epoch': e,
-                'precision@1': prec1,
-                'precision@5': prec5,
-            }
-            self.save_checkpoint(
-                training_state,
-                is_best
-                )
-        print("-----Training Completed-----\n")
-        self.writer.export_scalars_to_json("./all_scalars.json")
-        self.writer.close()
-
-    def updateBN(self):
-        for m in self.model.modules():
-            if isinstance(
-                    m, Varying_BatchNorm2D) or isinstance(
-                    m, Varying_BatchNorm1D):
-                m.updateFactors_(0.)
-                m.updateGrad()
-
-
-class SE_Trainer(Trainer):
-    def __init__(self, **kwargs):
-        super(SE_Trainer, self).__init__(**kwargs)
-        self.SEBlock = kwargs['SEBlock']
-
-    def start(self):
-        if not os.path.exists(self.root):
-            os.makedirs(self.root)
-        print(self.model)
-        if self.cuda:
-            print("Using GPU: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
-        print('-----Start Training-----\n')
-        best_precision = 0
-        if isinstance(self.criterion, nn.CrossEntropyLoss):
-            self.criterion.size_average = False
-        for e in range(self.start_epoch, self.epochs):
-            train_loss = self.train(e)
-            self.writer.add_scalar(
-                '/data/entropy', self.get_all_se_module_output_entropy(), e)
-            bn_idx = 0
-            for m in self.model.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    self.writer.add_histogram(
-                        'BN'+str(bn_idx), m.weight.data.cpu().numpy(), e)
-                    bn_idx += 1
-
-            precision, validate_loss = self.validate()
-
-            self.scheduler.step(validate_loss)
-            self.writer.add_scalar('data/train_loss', train_loss, e)
-            self.writer.add_scalar('data/validate_loss', validate_loss, e)
-
-            is_best = precision > best_precision
-            training_state = {
-                'start_epoch': e,
-                'precision': precision,
-            }
-            self.save_checkpoint(
-                training_state,
-                is_best
-                )
-        print("-----Training Completed-----\n")
-        self.writer.export_scalars_to_json("./all_scalars.json")
-        self.writer.close()
-
-    def get_all_se_module_output_entropy(self):
-        total = 0
-        for idx, m in enumerate(self.model.modules()):
-            if isinstance(m, self.SEBlock):
-                # print(m.weight.data.shape)
-                # print('Layer_index:{} output:{}'.format(idx,type(m.output)))
-                prob_w = F.softmax(m.output, dim=1)
-                sum = 0
-                for p in prob_w:
-                    sum += torch.sum(-p*torch.log(p))
-                total += (sum/m.output.shape[0])
-        return total
-
-
 class KD_FineTuning_Trainer(Trainer):
+
     def __init__(self, **kwargs):
         super(KD_FineTuning_Trainer, self).__init__(**kwargs)
         self.teacher_model = kwargs['teacher']
@@ -727,13 +617,12 @@ class KD_FineTuning_Trainer(Trainer):
     #    init_hook(self.teacher_model, activationMap_teacher_hook)
     #    for i,j in zip(activationMap_student_hook, activationMap_teacher_hook):
     #        KD_Loss.append()
-
     def train(self, e):
         self.model.train()
 
         losses = AverageMeter()
-        top1 = AverageMeter()
-        top5 = AverageMeter()
+        topAcc = [AverageMeter() for i in self.topk]
+        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
 
         for batch_idx, (data, label) in enumerate(self.train_loader):
@@ -741,42 +630,51 @@ class KD_FineTuning_Trainer(Trainer):
 
             if self.cuda:
                 data, label = data.cuda(), label.cuda(async=True)
-            data, label = Variable(data), Variable(label)
 
             output = self.model(data)
             teacher_output = self.teacher_model(data)
             transfer_loss = self.transfer_criterion(output, teacher_output)
             loss = (1 - self.loss_ratio) * self.criterion(output,
                                                           label) + self.loss_ratio * transfer_loss
-            prec1, prec5 = self.accuracy(output.data, label.data, topk=(1, 5))
+
+            prec = self.accuracy(output.data, label.data, topk=self.topk)
+            classes_count, classes_total, res = self.classes_accuracy(
+                output[0].data, label.data)
+
             losses.update(loss.data[0], data.size(0))
-            top1.update(prec1[0], data.size(0))
-            top5.update(prec5[0], data.size(0))
+            for i, _ in enumerate(self.topk):
+                topAcc[i].update(prec[i], data.size(0))
+            for i, _ in enumerate(self.classes):
+                classesAcc[i].update(
+                    res[i].item(),
+                    classes_total[i].item(),
+                    classes_count[i].item())
 
             self.optimizer.zero_grad()
             loss.backward()
+            self.update()
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
                 print('Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.6f}\t'
-                      'Top1_Acc: {top1.val:.2f}%\t'
-                      'Top5_Acc: {top5.val:.2f}%'
+                      'Loss: {loss.avg:.6f}\t'
                       .format(
                         e,
                         (batch_idx + 1) * len(data),
                         len(self.train_loader.dataset),
                         loss=losses,
-                        top1=top1,
-                        top5=top5,
                           ))
+                for i, k in enumerate(self.topk):
+                    print('Top{}Acc:{Acc.avg:2f}\t'.format(k, Acc=topAcc[i]))
+                for i, c in enumerate(self.classes):
+                    print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
                 lr = iter(self.optimizer.param_groups).__next__()['lr']
-                print('Learning_Rate:{}'.format(lr))
-                losses.reset()
-                top1.reset()
-                top5.reset()
+                print('LearningRate:{}'.format(lr))
+
         print(
             'Training time (for an epoch) :{}'.format(
                 time.time() -
                 time_stamp))
-        return losses.avg
+
+        return topAcc, classesAcc, losses.avg
+
