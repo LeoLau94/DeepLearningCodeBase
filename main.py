@@ -8,8 +8,7 @@ from torchvision import datasets, transforms
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
 from utils import *
-from nets.my_vgg import vgg_diy
-from nets.resnet_pre_activation import *
+from nets import *
 # from utils.convert_DataParallel_Model import convert_DataParallel_Model_to_Common_Model
 # from utils.getClassesFromOfficialDataset import cifar_load_meta
 from datetime import datetime
