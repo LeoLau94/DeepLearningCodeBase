@@ -9,8 +9,6 @@ import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
 from utils import *
 from nets import *
-# from utils.convert_DataParallel_Model import convert_DataParallel_Model_to_Common_Model
-# from utils.getClassesFromOfficialDataset import cifar_load_meta
 from datetime import datetime
 current_time = datetime.now().strftime('%b%d_%H-%M-%S')
 
@@ -62,26 +60,23 @@ parser.add_argument(
     '--log-interval', type=int, default=100, metavar='N',
     help='how many batches to wait before logging training status')
 parser.add_argument(
+    '--enable-class-accuracy',
+    '-eca',
+    dest='eca',
+    action='store_true',
+    default=False,
+     help='enable class accuracy')
+parser.add_argument(
     '--save-path',
     type=str,
     default='./save/',
     metavar='PATH',
     help='path to save checkpoint')
 parser.add_argument('--num-workers', type=int, default=1,
-                    help='how many thread to load data(default: 1)')
+                    help='how many threads to load data(default: 1)')
 parser.add_argument('--num_classes', type=int, default=10)
 parser.add_argument('--image-root-path', default='', type=str, metavar='PATH',
                     help='path to root path of images (default: none)')
-parser.add_argument('--image-train-list', default='', type=str, metavar='PATH',
-                    help='path to training list (default: none)')
-parser.add_argument(
-    '--image-validate-list',
-    default='',
-    type=str,
-    metavar='PATH',
-    help='path to validation list (default: none)')
-parser.add_argument('--img-size', '--img_size', default=144, type=int)
-parser.add_argument('--crop-size', '--crop_size', default=128, type=int)
 parser.add_argument(
     '--teacher_model', default=None, type=str, metavar='PATH',
     help='teacher model for knowledge distillation')
@@ -100,6 +95,7 @@ cudnn.benchmark = True
 model_dict = {
     'vgg': vgg_diy,
     'resnet': preactivation_resnet164,
+    'sphereface': sphere20,
 }
 
 
@@ -165,6 +161,7 @@ if args.dataset == 'cifar10':
          dataset=validate_dataset,
          batch_size=args.validate_batch_size, shuffle=False, **kwargs
          )
+
 elif args.dataset == 'cifar100':
     normalize = transforms.Normalize(
         mean=[0.507, 0.487, 0.441],
@@ -198,30 +195,52 @@ elif args.dataset == 'cifar100':
          dataset=validate_dataset,
          batch_size=args.validate_batch_size, shuffle=False, **kwargs
          )
+
+elif args.dataset == 'celeba':
+    image_root = os.path.join(args.image_root_path, 'img_align_celeba')
+    fileList = os.path.join(args.image_root_path, 'Anno/identity_CelebA.txt')
+    attrLsit = os.path.join(args.image_root_path, 'Anno/list_attr_celeba.txt')
+    loader = torch.utils.data.DataLoader(
+        CelebADataset(root=image_root, fileList=fileList, attrLsit=attrLsit,),
+        batch_size=args.batch_size,
+        shuffle=False,
+        **kwargs
+    )
+
+elif args.dataset == 'webface':
+    train_root = os.path.join(args.image_root_path, 'webface_train')
+    validate_root = os.path.join(args.image_root_path, 'webface_val')
+    train_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(root=train_root,
+                             transform=transforms.Compose([
+                                 transforms.RandomCrop(256, padding=4),
+                                 transforms.RandomHorizontalFlip(),
+                                 transforms.ToTensor(),
+                                 ])
+                             ),
+        batch_size=args.batch_size, shuffle=True, **kwargs
+    )
+    validate_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(
+            root=validate_root,
+            transform=transforms.Compose([
+                transforms.ToTensor()
+            ])
+        ),
+        batch_size=args.validate_batch_size, shuffle=False, **kwargs)
+
 else:
     pass
-#    train_loader = torch.utils.data.DataLoader(
-#         ImageList(root=args.image_root_path, fileList=args.image_train_list,
-#                   transform=transforms.Compose([
-#                       transforms.Resize(size=(args.img_size, args.img_size)),
-#                       transforms.RandomCrop(args.crop_size),
-#                       transforms.RandomHorizontalFlip(),
-#                       transforms.ToTensor(),
-#                   ])
-#                   ),
-#         batch_size=args.batch_size, shuffle=True, **kwargs
-#         )
-#    validate_loader = torch.utils.data.DataLoader(
-#        ImageList(
-#            root=args.image_root_path, fileList=args.image_validate_list,
-#            transform=transforms.Compose(
-#                [transforms.Resize(
-#                     size=(args.crop_size, args.crop_size)),
-#                 transforms.ToTensor(), ])),
-#        batch_size=args.validate_batch_size, shuffle=False, **kwargs)
-#
+
 writer = SummaryWriter(log_dir=os.path.join(
     'runs', '|'.join([current_time, args.model, args.dataset])))
+
+plugins = []
+plugins.append(LossMonitor())
+plugins.append(TopKAccuracy(topk=(1, 5)))
+if args.eca:
+    plugins.append(ClassAccuracy())
+
 
 optimizer = optim.SGD(
    filter(
@@ -254,7 +273,8 @@ if args.sr:
          validate_loader=validate_loader,
          root=args.save_path,
          penalty=args.p,
-         writer=writer
+         writer=writer,
+         plugins=plugins
          )
 
 elif args.fine_tune is not None and args.teacher_model is not None:
@@ -275,6 +295,7 @@ elif args.fine_tune is not None and args.teacher_model is not None:
         loss_ratio=args.loss_ratio,
         transfer_criterion=transfer_criterion,
         writer=writer,
+        plugins=plugins
 
          )
 
@@ -293,6 +314,7 @@ else:
          validate_loader=validate_loader,
          root=args.save_path,
          writer=writer,
+         plugins=plugins
 
          )
 trainer.start()

@@ -37,4 +37,5 @@ CUDA_VISIBLE_DEVICES=4 python main.py \
   --wd=$WD\
   --num-worker=$NUM_WORKER\
   -sr\
-  --dataset='cifar10'
+  --dataset='cifar10'\
+  -eca

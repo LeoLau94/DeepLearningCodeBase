@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
-# import torch.optim as optim
 from torch.autograd import Variable
-# from torch.nn import functional as F
 from torch.optim import lr_scheduler
+from .plugins import *
 import os
 import time
 import math
@@ -25,31 +24,6 @@ __all__ = [
     'Network_Slimming_Trainer',
     'KD_FineTuning_Trainer',
     ]
-
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.count = 0
-        self.total = 0
-
-    def updateWithVal(self, val, delta):
-        self.val = val
-        self.count += val * delta
-        self.total += delta
-        self.avg = self.count / self.total
-
-    def updateWithCount(self, count=1, delta=1):
-        self.count += count
-        self.total += delta
-        self.total = 1 if self.total == 0 else self.total
-        self.avg = self.count / self.total
 
 
 class VaryingBNlrClipper(object):
@@ -78,26 +52,30 @@ class Trainer:
         self.train_loader = kwargs['train_loader']
         self.validate_loader = kwargs['validate_loader']
         self.root = kwargs['root']
-        self.classes = self.train_loader.dataset.classes
-        if kwargs['topk'] is not None:
-            self.topk = kwargs['topk']
-        else:
-            if len(self.classes) > 5:
-                self.topk = (1, 5)
-            else:
-                self.topk = (1,)
+        self.plugins = kwargs['plugins']
+        for p in self.plugins:
+            p.register(self)
 
         self.writer = kwargs['writer']
-        self.scheduler = lr_scheduler.MultiStepLR(
-            self.optimizer, milestones=[
-                self.epochs * 0.5, self.epochs * 0.75], gamma=0.1)
+        # self.scheduler = lr_scheduler.MultiStepLR(
+        #    self.optimizer, milestones=[
+        #        self.epochs * 0.5, self.epochs * 0.75], gamma=0.1)
+        lamba1 = lambda epoch: 0.7 ** epoch
+        self.scheduler = lr_scheduler.LambdaLR(
+            self.optimizer,
+            lr_lambda=lamba1
+        )
+
+    def get_specified_plugins(self, plugins_type=IterationMonitor):
+        for p in self.plugins:
+            if isinstance(p, plugins_type):
+                yield p
 
     def train(self, e):
         self.model.train()
+        for p in self.get_specified_plugins():
+            p.reset()
 
-        losses = AverageMeter()
-        topAcc = [AverageMeter() for i in self.topk]
-        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
 
         for batch_idx, (data, label) in enumerate(self.train_loader):
@@ -108,58 +86,32 @@ class Trainer:
 
             output = self.model(data)
             loss = self.criterion(output, label)
-            prec = self.accuracy(output.data, label.data, topk=self.topk)
-            classes_count, classes_total = self.classes_accuracy(
-                output.data, label.data)
-
-            losses.updateWithVal(loss.data[0], data.size(0))
-            for i, _ in enumerate(self.topk):
-                topAcc[i].updateWithVal(prec[i], data.size(0))
-            for i, _ in enumerate(self.classes):
-                classesAcc[i].updateWithCount(
-                    classes_count[i].item(),
-                    classes_total[i].item())
 
             self.optimizer.zero_grad()
             loss.backward()
+            for p in self.get_specified_plugins():
+                p.call(output, label, loss)
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
-                current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
-                print('=======================================')
-                print('{}\t Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.avg:.6f}\t'
-                      .format(
-                        current_time,
-                        e,
-                        (batch_idx + 1) * len(data),
-                        len(self.train_loader.dataset),
-                        loss=losses,
-                          ))
-                print('------------Topk Accuracy--------------')
-                log = ''
-                for i, k in enumerate(self.topk):
-                    log += 'Top {} Acc:{Acc.avg:2f}%\t'.format(k, Acc=topAcc[i])
-                print(log)
-                # print('------------Class Accuracy--------------')
-                # for i, c in enumerate(self.classes):
-                #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
-                lr = iter(self.optimizer.param_groups).__next__()['lr']
-                print('LearningRate:{}'.format(lr))
+                for p in self.get_specified_plugins():
+                    p.logger(e=e)
 
-        print(
-            'Training time (for an epoch) :{}'.format(
-                time.time() -
-                time_stamp))
+        for p in self.get_specified_plugins():
+            p.logger(train=False)
 
-        return topAcc, classesAcc, losses.avg
+        print('Training Time: {}'.format(time.time() - time_stamp))
+
+        results = {}
+        for p in self.get_specified_plugins():
+            results[p.name] = p.getState()
+
+        return results
 
     def validate(self):
         self.model.eval()
-
-        losses = AverageMeter()
-        topAcc = [AverageMeter() for i in self.topk]
-        classesAcc = [AverageMeter() for c in self.classes]
+        for p in self.get_specified_plugins():
+            p.reset()
 
         time_stamp = time.time()
         for data, label in self.validate_loader:
@@ -169,38 +121,18 @@ class Trainer:
                 output = self.model(data)
                 loss = self.criterion(output, label)
 
-            prec = self.accuracy(output.data, label.data, topk=self.topk)
-            classes_count, classes_total = self.classes_accuracy(
-                output.data, label.data)
+            for p in self.get_specified_plugins():
+                p.call(output, label, loss)
 
-            losses.updateWithVal(loss.data[0], data.size(0))
-            for i, _ in enumerate(self.topk):
-                topAcc[i].updateWithVal(prec[i], data.size(0))
-            for i, _ in enumerate(self.classes):
-                classesAcc[i].updateWithCount(
-                    classes_count[i].item(),
-                    classes_total[i].item())
+        for p in self.get_specified_plugins():
+            p.logger(train=False)
+        print('Validation Time: {}'.format(time.time() - time_stamp))
 
-        print('=======================================')
-        current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
-        print('\n{}\t Validate_Avg_Loss: {loss.avg:.4f},\t'
-              'Time: {:.4f}s\n'
-              .format(
-                  current_time,
-                  time.time() - time_stamp,
-                  loss=losses,
-              ))
+        results = {}
+        for p in self.get_specified_plugins():
+            results[p.name] = p.getState()
 
-        print('------------Topk Accuracy--------------')
-        log = ''
-        for i, k in enumerate(self.topk):
-            log += 'Top {} Acc:{Acc.avg:2f}\t'.format(k, Acc=topAcc[i])
-        print(log)
-        # print('------------Class Accuracy--------------')
-        # for i, c in enumerate(self.classes):
-        #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
-
-        return topAcc, classesAcc, losses.avg
+        return results
 
     def start(self):
 
@@ -215,7 +147,7 @@ class Trainer:
         best_precision = 0
         for e in range(self.start_epoch, self.epochs):
             self.scheduler.step()
-            train_topk_acc, train_class_acc, train_loss = self.train(e)
+            train_results = self.train(e)
 
             bn_idx = 0
             for m in self.model.modules():
@@ -229,30 +161,26 @@ class Trainer:
 
                     bn_idx += 1
 
-            validate_topk_acc, validate_class_acc, validate_loss = self.validate()
+            validation_results = self.validate()
 
-            # self.writer.add_scalar('/data/entropy',self.get_all_gamma_entropy(),e)
-            LOSS = {'train': train_loss, 'validate': validate_loss}
-            trainTopk = {}
-            validateTopk = {}
-            trainClasses = {}
-            validateClasses = {}
-            for i, k in enumerate(self.topk):
-                trainTopk['Top%s' % k] = train_topk_acc[i].avg
-                validateTopk['Top%s' % k] = validate_topk_acc[i].avg
-            for i, c in enumerate(self.classes):
-                trainClasses['%s' % c] = train_class_acc[i].avg
-                validateClasses['%s' % c] = validate_class_acc[i].avg
-
+            LOSS = {
+                'train': train_results['Loss'].avg,
+                'validate': validation_results['Loss'].avg}
             self.writer.add_scalars('Loss', LOSS, e)
-            self.writer.add_scalars('Topk_Accuracy/Training', trainTopk, e)
-            self.writer.add_scalars('Topk_Accuracy/Validation', validateTopk, e)
-            self.writer.add_scalars(
-                'Classes_Accuracy/Training', trainClasses, e)
-            self.writer.add_scalars(
-                'Classes_Accuracy/Validation', validateClasses, e)
 
-            is_best = validate_topk_acc[0].avg > best_precision
+            for p in self.get_specified_plugins():
+                if p.name != 'Loss':
+                    self.writer.add_scalars(
+                        '%s/Training', train_results[p.name], e)
+                    self.writer.add_scalars(
+                        '%s/Validation',
+                        validation_results[
+                            p.name],
+                        e)
+
+            top1Acc = validation_results['TopK Accuracy']['Top 1']
+            is_best = top1Acc > best_precision
+            best_precision = top1Acc if top1Acc > best_precision else best_precision
             training_state = {
                 'start_epoch': e,
             }
@@ -299,45 +227,6 @@ class Trainer:
             print('Successfully resume')
         else:
             print('Failed to resume')
-
-    def accuracy(self, output, target, topk=(1,)):
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
-
-    def classes_accuracy(self, output, target):
-
-        classes_total = torch.zeros(len(self.classes))
-        classes_count = torch.zeros(len(self.classes))
-
-        target_idx = target.view(-1).to(torch.int)
-        for idx in target_idx:
-            classes_total[idx] += 1
-
-        _, pred = output.topk(1, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-        classes_idx = pred.masked_select(correct).to(torch.int)
-
-        for idx in classes_idx:
-            classes_count[idx] += 1
-
-       #  avoid_zero_classes_total = classes_total.clone()
-       #  azct_np = avoid_zero_classes_total.numpy()
-       #  azct_np[azct_np == 0] = 1
-
-       #  res = torch.mul(classes_count, 100).div_(avoid_zero_classes_total)
-
-        return classes_count.to(torch.int), classes_total.to(torch.int)
 
     def adjust_lr_cosine(self, epoch, batch, nBatch):
         T_total = self.epochs * nBatch
@@ -398,7 +287,7 @@ class Network_Slimming_Trainer(Trainer):
                 current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
                 print('=======================================')
                 print('{}\t Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.avg:.6f}\t'
+                      'Loss: {loss.val:.6f}\t'
                       .format(
                         current_time,
                         e,
@@ -409,7 +298,7 @@ class Network_Slimming_Trainer(Trainer):
                 print('------------Topk Accuracy--------------')
                 log = ''
                 for i, k in enumerate(self.topk):
-                    log += 'Top {} Acc:{Acc.avg:2f}%\t'.format(k, Acc=topAcc[i])
+                    log += 'Top {} Acc:{Acc.val:2f}%\t'.format(k, Acc=topAcc[i])
                 print(log)
                 # print('------------Class Accuracy--------------')
                 # for i, c in enumerate(self.classes):
@@ -657,7 +546,7 @@ class KD_FineTuning_Trainer(Trainer):
 
             if (batch_idx + 1) % self.log_interval == 0:
                 print('Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.avg:.6f}\t'
+                      'Loss: {loss.val:.6f}\t'
                       .format(
                         e,
                         (batch_idx + 1) * len(data),
@@ -665,9 +554,9 @@ class KD_FineTuning_Trainer(Trainer):
                         loss=losses,
                           ))
                 for i, k in enumerate(self.topk):
-                    print('Top{}Acc:{Acc.avg:2f}\t'.format(k, Acc=topAcc[i]))
+                    print('Top{}Acc:{Acc.val:2f}\t'.format(k, Acc=topAcc[i]))
                 for i, c in enumerate(self.classes):
-                    print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
+                    print('{} Acc:{Acc.val:2f}\t'.format(c, Acc=classesAcc[i]))
                 lr = iter(self.optimizer.param_groups).__next__()['lr']
                 print('LearningRate:{}'.format(lr))
 
@@ -677,4 +566,3 @@ class KD_FineTuning_Trainer(Trainer):
                 time_stamp))
 
         return topAcc, classesAcc, losses.avg
-
