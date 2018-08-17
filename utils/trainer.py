@@ -6,7 +6,6 @@ from .plugins import *
 import os
 import time
 import math
-from datetime import datetime
 # import numpy as np
 # from scipy.integrate import quad
 # from scipy import stats
@@ -252,10 +251,9 @@ class Network_Slimming_Trainer(Trainer):
 
     def train(self, e):
         self.model.train()
+        for p in self.get_specified_plugins():
+            p.reset()
 
-        losses = AverageMeter()
-        topAcc = [AverageMeter() for i in self.topk]
-        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
 
         for batch_idx, (data, label) in enumerate(self.train_loader):
@@ -266,52 +264,28 @@ class Network_Slimming_Trainer(Trainer):
 
             output = self.model(data)
             loss = self.criterion(output, label)
-            prec = self.accuracy(output.data, label.data, topk=self.topk)
-            classes_count, classes_total = self.classes_accuracy(
-                output.data, label.data)
-
-            losses.updateWithVal(loss.data[0], data.size(0))
-            for i, _ in enumerate(self.topk):
-                topAcc[i].updateWithVal(prec[i], data.size(0))
-            for i, _ in enumerate(self.classes):
-                classesAcc[i].updateWithCount(
-                    classes_count[i].item(),
-                    classes_total[i].item())
 
             self.optimizer.zero_grad()
             loss.backward()
             self.updateBN()
+            for p in self.get_specified_plugins():
+                p.call(output, label, loss)
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
-                current_time = datetime.now().strftime('%Y-%b-%d-%H-%M-%S')
-                print('=======================================')
-                print('{}\t Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.6f}\t'
-                      .format(
-                        current_time,
-                        e,
-                        (batch_idx + 1) * len(data),
-                        len(self.train_loader.dataset),
-                        loss=losses,
-                          ))
-                print('------------Topk Accuracy--------------')
-                log = ''
-                for i, k in enumerate(self.topk):
-                    log += 'Top {} Acc:{Acc.val:2f}%\t'.format(k, Acc=topAcc[i])
-                print(log)
-                # print('------------Class Accuracy--------------')
-                # for i, c in enumerate(self.classes):
-                #     print('{} Acc:{Acc.avg:2f}\t'.format(c, Acc=classesAcc[i]))
-                lr = iter(self.optimizer.param_groups).__next__()['lr']
-                print('LearningRate:{}'.format(lr))
+                for p in self.get_specified_plugins():
+                    p.logger(e=e)
 
-        print(
-            'Training time (for an epoch) :{}'.format(
-                time.time() -
-                time_stamp))
+        for p in self.get_specified_plugins():
+            p.logger(train=False)
 
-        return topAcc, classesAcc, losses.avg
+        print('Training Time: {}'.format(time.time() - time_stamp))
+
+        results = {}
+        for p in self.get_specified_plugins():
+            results[p.name] = p.getState()
+
+        return results
 
     def updateBN(self):
         for m in self.model.modules():
@@ -506,12 +480,12 @@ class KD_FineTuning_Trainer(Trainer):
     #    init_hook(self.teacher_model, activationMap_teacher_hook)
     #    for i,j in zip(activationMap_student_hook, activationMap_teacher_hook):
     #        KD_Loss.append()
+
     def train(self, e):
         self.model.train()
+        for p in self.get_specified_plugins():
+            p.reset()
 
-        losses = AverageMeter()
-        topAcc = [AverageMeter() for i in self.topk]
-        classesAcc = [AverageMeter() for c in self.classes]
         time_stamp = time.time()
 
         for batch_idx, (data, label) in enumerate(self.train_loader):
@@ -526,43 +500,24 @@ class KD_FineTuning_Trainer(Trainer):
             loss = (1 - self.loss_ratio) * self.criterion(output,
                                                           label) + self.loss_ratio * transfer_loss
 
-            prec = self.accuracy(output.data, label.data, topk=self.topk)
-            classes_count, classes_total, res = self.classes_accuracy(
-                output[0].data, label.data)
-
-            losses.update(loss.data[0], data.size(0))
-            for i, _ in enumerate(self.topk):
-                topAcc[i].update(prec[i], data.size(0))
-            for i, _ in enumerate(self.classes):
-                classesAcc[i].update(
-                    res[i].item(),
-                    classes_total[i].item(),
-                    classes_count[i].item())
 
             self.optimizer.zero_grad()
             loss.backward()
-            self.update()
+            for p in self.get_specified_plugins():
+                p.call(output, label, loss)
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
-                print('Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.6f}\t'
-                      .format(
-                        e,
-                        (batch_idx + 1) * len(data),
-                        len(self.train_loader.dataset),
-                        loss=losses,
-                          ))
-                for i, k in enumerate(self.topk):
-                    print('Top{}Acc:{Acc.val:2f}\t'.format(k, Acc=topAcc[i]))
-                for i, c in enumerate(self.classes):
-                    print('{} Acc:{Acc.val:2f}\t'.format(c, Acc=classesAcc[i]))
-                lr = iter(self.optimizer.param_groups).__next__()['lr']
-                print('LearningRate:{}'.format(lr))
+                for p in self.get_specified_plugins():
+                    p.logger(e=e)
 
-        print(
-            'Training time (for an epoch) :{}'.format(
-                time.time() -
-                time_stamp))
+        for p in self.get_specified_plugins():
+            p.logger(train=False)
 
-        return topAcc, classesAcc, losses.avg
+        print('Training Time: {}'.format(time.time() - time_stamp))
+
+        results = {}
+        for p in self.get_specified_plugins():
+            results[p.name] = p.getState()
+
+        return results
