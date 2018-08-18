@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from datetime import datetime
 
 
@@ -43,6 +44,61 @@ class Plugin:
 
 class IterationMonitor(Plugin):
 
+    def __init__(self):
+        self.plugin_type = 'iteration'
+
+
+class EpochMonitor(Plugin):
+
+    def __init__(self):
+        self.plugin_type = 'epoch'
+
+
+class BatchMonitor(Plugin):
+
+    def __init__(self):
+        self.plugin_type = 'batch'
+
+
+class UpdateMonitor(Plugin):
+
+    def __init__(self):
+        self.plugin_type = 'update'
+
+
+class DataForward(Plugin):
+
+    def __init__(self, train_forward, validation_forward=None, **kwargs):
+        self.plugin_type = 'dataforward'
+        self.train_forward = train_forward
+        self.validation_forward = validation_forward
+        self.kwargs = kwargs
+
+    def call(self, data, target, train=True):
+        if train:
+            return self.train_forward(self, data, target)
+        elif self.validation_forward:
+            return self.validation_forward(self, data, target)
+        else:
+            return self.train_forward(self, data, target)
+
+
+class ModelGradHandler(UpdateMonitor):
+
+    def __init__(self, lambda_=None, **kwargs):
+        super(ModelGradHandler, self).__init__()
+        self.lambda_ = lambda_
+        self.kwargs = kwargs
+
+    def register(self, trainer):
+        self.model = trainer.model
+
+    def call(self):
+        self.lambda_(self)
+
+
+class DataMonitor(IterationMonitor):
+
     def call(self, output, target, loss):
         if not isinstance(output, tuple):
             self.__handle__(output.data, target.data, loss.item())
@@ -59,7 +115,7 @@ class IterationMonitor(Plugin):
         raise NotImplementedError
 
 
-class LossMonitor(IterationMonitor):
+class LossMonitor(DataMonitor):
     name = 'Loss'
 
     def __init__(self):
@@ -117,10 +173,11 @@ class LossMonitor(IterationMonitor):
         self.__changeLoggerName__()
 
 
-class TopKAccuracy(IterationMonitor):
+class TopKAccuracy(DataMonitor):
     name = 'TopK Accuracy'
 
     def __init__(self, topk=(1,)):
+        super(TopKAccuracy, self).__init__()
         self.topk = topk
         self.topAcc = [AverageMeter() for i in self.topk]
 
@@ -167,7 +224,7 @@ class TopKAccuracy(IterationMonitor):
             k.reset()
 
 
-class ClassAccuracy(IterationMonitor):
+class ClassAccuracy(DataMonitor):
     name = 'Classes Accuracy'
 
     def __init__(self):
@@ -208,7 +265,9 @@ class ClassAccuracy(IterationMonitor):
         super().logger()
         if train:
             for i, c in enumerate(self.classes):
-                print('{} Acc:{Acc.val:.2f}%\t'.format(c, Acc=self.classesAcc[i]))
+                print(
+                    '{} Acc:{Acc.val:.2f}%\t'.format(
+                        c, Acc=self.classesAcc[i]))
         else:
             for i, c in enumerate(self.classes):
                 print('{} Acc:{Acc.avg:.2f}%[{:d}/{Acc.total:d}]\t'.format(
@@ -223,3 +282,29 @@ class ClassAccuracy(IterationMonitor):
     def reset(self):
         for c in self.classesAcc:
             c.reset()
+
+
+class IterationSummaryMonitor(EpochMonitor):
+    def call(self, train_results, validation_results, e):
+        for p in self.trainer.plugins['iteration']:
+            self.trainer.writer.add_scalars(
+                '%s/Training', train_results[p.name], e)
+            self.trainer.writer.add_scalars(
+                '%s/Validation',
+                validation_results[
+                    p.name],
+                e)
+
+
+class DistributionOfBNMonitor(EpochMonitor):
+    def call(self, train_results, validation_results, e):
+        bn_idx = 0
+        for m in self.trainer.model.modules():
+            if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
+                bn_idx += 1
+                self.writer.add_histogram(
+                    'BatchNorm Layer%d Gamma' %
+                    bn_idx, m.weight.clone().cpu().data.numpy(), e)
+                self.writer.add_histogram(
+                    'BatchNorm Layer%d Beta' %
+                    bn_idx, m.bias.clone().cpu().data.numpy(), e)

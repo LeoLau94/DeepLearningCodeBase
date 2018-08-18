@@ -235,6 +235,7 @@ else:
 writer = SummaryWriter(log_dir=os.path.join(
     'runs', '|'.join([current_time, args.model, args.dataset])))
 
+
 plugins = []
 plugins.append(LossMonitor())
 plugins.append(TopKAccuracy(topk=(1, 5)))
@@ -257,31 +258,59 @@ optimizer = optim.SGD(
 #    lr=args.lr,
 #    weight_decay=args.weight_decay)
 criterion = nn.CrossEntropyLoss()
-transfer_criterion = nn.MSELoss()
+
+
+def dataforward(self, data, target):
+    output = self.trainer.model(data)
+    loss = self.trainer.criterion(output, target)
+    return output, loss
+
 if args.sr:
-    print('\nSparsity Training \n')
-    trainer = Network_Slimming_Trainer(
-         model=model,
-         optimizer=optimizer,
-         lr=args.lr,
-         criterion=criterion,
-         start_epoch=args.start_epoch,
-         epochs=args.epochs,
-         cuda=args.cuda,
-         log_interval=args.log_interval,
-         train_loader=train_loader,
-         validate_loader=validate_loader,
-         root=args.save_path,
-         penalty=args.p,
-         writer=writer,
-         plugins=plugins
-         )
+    print('\nTraining With LASSO\n')
+    args.save_path = os.path.join(args.save_path, 'lasso')
+
+    def updateBN(self):
+        for m in self.model.modules():
+            if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                m.weight.grad.data.add_(
+                    self.kwargs['penalty'] *
+                    torch.sign(
+                        m.weight.data))
+    plugins.append(DataForward(dataforward))
+    plugins.append(ModelGradHandler(updateBN, penalty=args.p))
 
 elif args.fine_tune is not None and args.teacher_model is not None:
+    transfer_criterion = nn.MSELoss()
+    teacher_model.eval()
+    for p in teacher_model.parameters():
+        p.requires_grad = False
     print('\nTraining with Knowledge Distillation \n')
-    trainer = Trainer(
+
+    def train_forward(self, data, target):
+        student_output = self.trainer.model(data)
+        teacher_output = self.kwargs['teacher_model'](data)
+
+        transfer_loss = self.kwargs['transfer_criterion'](
+            student_output, teacher_output)
+        softmax_loss = self.trainer.criterion(student_output, target)
+        loss = (1 - self.kwargs['loss_ration']
+                ) * softmax_loss + self.kwargs['loss_ration'] * transfer_loss
+
+        return student_output, loss
+
+    plugins.append(
+        DataForward(
+            train_forward,
+            validation_forward=dataforward,
+            teacher_model=teacher_model,
+         transfer_loss=transfer_loss))
+
+else:
+    print('\nNormal Training \n')
+    plugins.append(DataForward(dataforward))
+
+trainer = Trainer(
         model=model,
-        teacher_model=teacher_model,
         optimizer=optimizer,
         lr=args.lr,
         criterion=criterion,
@@ -292,29 +321,8 @@ elif args.fine_tune is not None and args.teacher_model is not None:
         train_loader=train_loader,
         validate_loader=validate_loader,
         root=args.save_path,
-        loss_ratio=args.loss_ratio,
-        transfer_criterion=transfer_criterion,
         writer=writer,
         plugins=plugins
 
-         )
-
-else:
-    print('\nNormal Training \n')
-    trainer = Trainer(
-         model=model,
-         optimizer=optimizer,
-         lr=args.lr,
-         criterion=criterion,
-         start_epoch=args.start_epoch,
-         epochs=args.epochs,
-         cuda=args.cuda,
-         log_interval=args.log_interval,
-         train_loader=train_loader,
-         validate_loader=validate_loader,
-         root=args.save_path,
-         writer=writer,
-         plugins=plugins
-
-         )
+        )
 trainer.start()

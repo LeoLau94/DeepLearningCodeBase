@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from torch.optim import lr_scheduler
-from .plugins import *
 import os
 import time
 import math
@@ -39,7 +38,6 @@ class VaryingBNlrClipper(object):
 class Trainer:
 
     def __init__(self, **kwargs):
-        kwargs.setdefault('topk', None)
         self.model = kwargs['model']
         self.optimizer = kwargs['optimizer']
         self.lr = kwargs['lr']
@@ -51,28 +49,32 @@ class Trainer:
         self.train_loader = kwargs['train_loader']
         self.validate_loader = kwargs['validate_loader']
         self.root = kwargs['root']
-        self.plugins = kwargs['plugins']
-        for p in self.plugins:
+        self.plugins = {}
+        for name in [
+            'iteration',
+            'epoch',
+            'batch',
+            'update',
+            'dataforward']:
+            self.plugins.setdefault(name, [])
+
+        for p in kwargs['plugins']:
             p.register(self)
+            self.plugins[p.plugin_type].append(p)
 
         self.writer = kwargs['writer']
         # self.scheduler = lr_scheduler.MultiStepLR(
         #    self.optimizer, milestones=[
         #        self.epochs * 0.5, self.epochs * 0.75], gamma=0.1)
-        lamba1 = lambda epoch: 0.7 ** epoch
+        lamba1 = lambda epoch: 0.95 ** epoch
         self.scheduler = lr_scheduler.LambdaLR(
             self.optimizer,
             lr_lambda=lamba1
         )
 
-    def get_specified_plugins(self, plugins_type=IterationMonitor):
-        for p in self.plugins:
-            if isinstance(p, plugins_type):
-                yield p
-
     def train(self, e):
         self.model.train()
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             p.reset()
 
         time_stamp = time.time()
@@ -83,33 +85,35 @@ class Trainer:
             if self.cuda:
                 data, label = data.cuda(), label.cuda(async=True)
 
-            output = self.model(data)
-            loss = self.criterion(output, label)
+            output, loss = self.plugins['dataforward'][0].call(data, label)
+
+            for p in self.plugins['iteration']:
+                p.call(output, label, loss)
 
             self.optimizer.zero_grad()
             loss.backward()
-            for p in self.get_specified_plugins():
-                p.call(output, label, loss)
+            for p in self.plugins['update']:
+                p.call()
             self.optimizer.step()
 
             if (batch_idx + 1) % self.log_interval == 0:
-                for p in self.get_specified_plugins():
+                for p in self.plugins['iteration']:
                     p.logger(e=e)
 
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             p.logger(train=False)
 
         print('Training Time: {}'.format(time.time() - time_stamp))
 
         results = {}
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             results[p.name] = p.getState()
 
         return results
 
     def validate(self):
         self.model.eval()
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             p.reset()
 
         time_stamp = time.time()
@@ -117,18 +121,18 @@ class Trainer:
             if self.cuda:
                 data, label = data.cuda(), label.cuda()
             with torch.no_grad():
-                output = self.model(data)
-                loss = self.criterion(output, label)
+                output, loss = self.plugins['dataforward'][0].call(
+                    data, label, train=False)
 
-            for p in self.get_specified_plugins():
+            for p in self.plugins['iteration']:
                 p.call(output, label, loss)
 
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             p.logger(train=False)
         print('Validation Time: {}'.format(time.time() - time_stamp))
 
         results = {}
-        for p in self.get_specified_plugins():
+        for p in self.plugins['iteration']:
             results[p.name] = p.getState()
 
         return results
@@ -147,35 +151,10 @@ class Trainer:
         for e in range(self.start_epoch, self.epochs):
             self.scheduler.step()
             train_results = self.train(e)
-
-            bn_idx = 0
-            for m in self.model.modules():
-                if isinstance(
-                        m, nn.BatchNorm2d) or isinstance(
-                        m, nn.BatchNorm1d):
-                    self.writer.add_histogram(
-                        'bn'+str(bn_idx) + 'gamma', m.weight.data.cpu().numpy(), e)
-                    self.writer.add_histogram(
-                        'bn'+str(bn_idx) + 'beta', m.bias.data.cpu().numpy(), e)
-
-                    bn_idx += 1
-
             validation_results = self.validate()
 
-            LOSS = {
-                'train': train_results['Loss'].avg,
-                'validate': validation_results['Loss'].avg}
-            self.writer.add_scalars('Loss', LOSS, e)
-
-            for p in self.get_specified_plugins():
-                if p.name != 'Loss':
-                    self.writer.add_scalars(
-                        '%s/Training', train_results[p.name], e)
-                    self.writer.add_scalars(
-                        '%s/Validation',
-                        validation_results[
-                            p.name],
-                        e)
+            for p in self.plugins['epoch']:
+                p.call(train_results, validation_results, e)
 
             top1Acc = validation_results['TopK Accuracy']['Top 1']
             is_best = top1Acc > best_precision
@@ -249,48 +228,6 @@ class Network_Slimming_Trainer(Trainer):
         # self.const_div = 2 / sqrt(pi)
         # self.const_norm = stats.norm(loc=0, scale=1 / sqrt(2))
 
-    def train(self, e):
-        self.model.train()
-        for p in self.get_specified_plugins():
-            p.reset()
-
-        time_stamp = time.time()
-
-        for batch_idx, (data, label) in enumerate(self.train_loader):
-            # lr = self.adjust_lr_cosine(e,batch_idx,len(self.train_loader))
-
-            if self.cuda:
-                data, label = data.cuda(), label.cuda(async=True)
-
-            output = self.model(data)
-            loss = self.criterion(output, label)
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.updateBN()
-            for p in self.get_specified_plugins():
-                p.call(output, label, loss)
-            self.optimizer.step()
-
-            if (batch_idx + 1) % self.log_interval == 0:
-                for p in self.get_specified_plugins():
-                    p.logger(e=e)
-
-        for p in self.get_specified_plugins():
-            p.logger(train=False)
-
-        print('Training Time: {}'.format(time.time() - time_stamp))
-
-        results = {}
-        for p in self.get_specified_plugins():
-            results[p.name] = p.getState()
-
-        return results
-
-    def updateBN(self):
-        for m in self.model.modules():
-            if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                m.weight.grad.data.add_(self.penalty*torch.sign(m.weight.data))
                 # m.bias.grad.data.add_(self.penalty*torch.sign(m.bias.data))
 
     def l1_penalty(self):
@@ -480,44 +417,3 @@ class KD_FineTuning_Trainer(Trainer):
     #    init_hook(self.teacher_model, activationMap_teacher_hook)
     #    for i,j in zip(activationMap_student_hook, activationMap_teacher_hook):
     #        KD_Loss.append()
-
-    def train(self, e):
-        self.model.train()
-        for p in self.get_specified_plugins():
-            p.reset()
-
-        time_stamp = time.time()
-
-        for batch_idx, (data, label) in enumerate(self.train_loader):
-            # lr = self.adjust_lr_cosine(e,batch_idx,len(self.train_loader))
-
-            if self.cuda:
-                data, label = data.cuda(), label.cuda(async=True)
-
-            output = self.model(data)
-            teacher_output = self.teacher_model(data)
-            transfer_loss = self.transfer_criterion(output, teacher_output)
-            loss = (1 - self.loss_ratio) * self.criterion(output,
-                                                          label) + self.loss_ratio * transfer_loss
-
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            for p in self.get_specified_plugins():
-                p.call(output, label, loss)
-            self.optimizer.step()
-
-            if (batch_idx + 1) % self.log_interval == 0:
-                for p in self.get_specified_plugins():
-                    p.logger(e=e)
-
-        for p in self.get_specified_plugins():
-            p.logger(train=False)
-
-        print('Training Time: {}'.format(time.time() - time_stamp))
-
-        results = {}
-        for p in self.get_specified_plugins():
-            results[p.name] = p.getState()
-
-        return results
