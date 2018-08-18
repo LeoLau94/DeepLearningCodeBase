@@ -19,8 +19,6 @@ sys.path.append('/home/leolau/pytorch/')
 
 __all__ = [
     'Trainer',
-    'Network_Slimming_Trainer',
-    'KD_FineTuning_Trainer',
     ]
 
 
@@ -382,38 +380,3 @@ class Network_Slimming_Trainer(Trainer):
                 idx += 1
 
         return total_loss
-
-
-class KD_FineTuning_Trainer(Trainer):
-
-    def __init__(self, **kwargs):
-        super(KD_FineTuning_Trainer, self).__init__(**kwargs)
-        self.teacher_model = kwargs['teacher']
-        self.transfer_criterion = kwargs['transfer_criterion']
-        self.loss_ratio = kwargs['loss_ratio']
-        self.teacher_model.eval()
-        for p in self.teacher_model.parameters():
-            p.requires_grad = False
-
-    # def KnowledgeDistillation(self):
-    #    KD_Loss = []
-    #    activationMaps_student = []
-    #    activationMaps_teacher = []
-
-    #    def activationMap_student_hook(self,input,output):
-    #        activationMaps_student.append(output.mean(dim=0, keepdim=True))
-
-    #    def activationMap_teacher_hook(self,input,output):
-    #        activationMaps_teacher.append(output.mean(dim=0, keepdim=True))
-
-    #    def init_hook(model, hook):
-    #        children = list(model.children())
-    #        if not children:
-    #            if isinstance(model, nn.Conv2d):
-    #                model.register_forward_hook(hook)
-    #        for i in children:
-    #            init_hook(i, hook)
-    #    init_hook(self.model, activationMap_student_hook)
-    #    init_hook(self.teacher_model, activationMap_teacher_hook)
-    #    for i,j in zip(activationMap_student_hook, activationMap_teacher_hook):
-    #        KD_Loss.append()

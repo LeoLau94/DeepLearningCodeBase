@@ -293,8 +293,8 @@ elif args.fine_tune is not None and args.teacher_model is not None:
         transfer_loss = self.kwargs['transfer_criterion'](
             student_output, teacher_output)
         softmax_loss = self.trainer.criterion(student_output, target)
-        loss = (1 - self.kwargs['loss_ration']
-                ) * softmax_loss + self.kwargs['loss_ration'] * transfer_loss
+        loss = (1 - self.kwargs['loss_ratio']
+                ) * softmax_loss + self.kwargs['loss_ratio'] * transfer_loss
 
         return student_output, loss
 
@@ -303,6 +303,7 @@ elif args.fine_tune is not None and args.teacher_model is not None:
             train_forward,
             validation_forward=dataforward,
             teacher_model=teacher_model,
+            loss_ratio=args.loss_ratio,
          transfer_loss=transfer_loss))
 
 else:
