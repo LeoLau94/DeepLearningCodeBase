@@ -165,7 +165,8 @@ class LossMonitor(DataMonitor):
                   ))
 
     def getState(self):
-        return self.loss
+        State = {'Loss': self.loss.avg}
+        return State
 
     def reset(self):
         self.loss.reset()
@@ -288,9 +289,9 @@ class IterationSummaryMonitor(EpochMonitor):
     def call(self, train_results, validation_results, e):
         for p in self.trainer.plugins['iteration']:
             self.trainer.writer.add_scalars(
-                '%s/Training', train_results[p.name], e)
+                '%s/Training' % p.name, train_results[p.name], e)
             self.trainer.writer.add_scalars(
-                '%s/Validation',
+                '%s/Validation' % p.name,
                 validation_results[
                     p.name],
                 e)
@@ -302,9 +303,9 @@ class DistributionOfBNMonitor(EpochMonitor):
         for m in self.trainer.model.modules():
             if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
                 bn_idx += 1
-                self.writer.add_histogram(
+                self.trainer.writer.add_histogram(
                     'BatchNorm Layer%d Gamma' %
                     bn_idx, m.weight.clone().cpu().data.numpy(), e)
-                self.writer.add_histogram(
+                self.trainer.writer.add_histogram(
                     'BatchNorm Layer%d Beta' %
                     bn_idx, m.bias.clone().cpu().data.numpy(), e)

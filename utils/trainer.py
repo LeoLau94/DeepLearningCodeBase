@@ -49,11 +49,11 @@ class Trainer:
         self.root = kwargs['root']
         self.plugins = {}
         for name in [
-            'iteration',
-            'epoch',
-            'batch',
-            'update',
-            'dataforward']:
+                'iteration',
+                'epoch',
+                'batch',
+                'update',
+                'dataforward']:
             self.plugins.setdefault(name, [])
 
         for p in kwargs['plugins']:
@@ -64,11 +64,13 @@ class Trainer:
         # self.scheduler = lr_scheduler.MultiStepLR(
         #    self.optimizer, milestones=[
         #        self.epochs * 0.5, self.epochs * 0.75], gamma=0.1)
-        lamba1 = lambda epoch: 0.95 ** epoch
-        self.scheduler = lr_scheduler.LambdaLR(
-            self.optimizer,
-            lr_lambda=lamba1
-        )
+        # lamba1 = lambda epoch: 0.97 ** epoch
+        # self.scheduler = lr_scheduler.LambdaLR(
+        #     self.optimizer,
+        #     lr_lambda=lamba1
+        # )
+        self.scheduler = lr_scheduler.CosineAnnealingLR(
+            self.optimizer, self.epochs)
 
     def train(self, e):
         self.model.train()
@@ -226,7 +228,7 @@ class Network_Slimming_Trainer(Trainer):
         # self.const_div = 2 / sqrt(pi)
         # self.const_norm = stats.norm(loc=0, scale=1 / sqrt(2))
 
-                # m.bias.grad.data.add_(self.penalty*torch.sign(m.bias.data))
+        # m.bias.grad.data.add_(self.penalty*torch.sign(m.bias.data))
 
     def l1_penalty(self):
         bn_l1_norm_all = 0

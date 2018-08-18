@@ -239,6 +239,8 @@ writer = SummaryWriter(log_dir=os.path.join(
 plugins = []
 plugins.append(LossMonitor())
 plugins.append(TopKAccuracy(topk=(1, 5)))
+plugins.append(IterationSummaryMonitor())
+plugins.append(DistributionOfBNMonitor())
 if args.eca:
     plugins.append(ClassAccuracy())
 
