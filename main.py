@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 # import torch.nn.functional as F
 import torch.optim as optim
+import torch.optim.lr_scheduler as scheduler
 from torchvision import datasets, transforms
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
@@ -117,17 +118,25 @@ else:
         # model.load_state_dict(load_pkl)
         args.save_path = os.path.join(
             args.save_path,
-            'fine_tune/' + args.model,
-            args.dataset)
+            'fine_tune',
+            args.model,
+            args.dataset,
+            current_time)
     else:
         model = model_dict[args.model](num_classes=args.num_classes)
-        args.save_path = os.path.join(args.save_path, args.model, args.dataset)
+        args.save_path = os.path.join(
+            args.save_path,
+            args.model,
+            args.dataset,
+            current_time)
 
 
 kwargs = {'num_workers': args.num_workers,
           'pin_memory': True} if args.cuda else {}
 
 dataset_root = '/data/torchvision/'
+scheduler_class = None
+scheduler_kwargs = None
 if args.dataset == 'cifar10':
     normalize = transforms.Normalize(
         mean=[0.491, 0.482, 0.447],
@@ -196,16 +205,6 @@ elif args.dataset == 'cifar100':
          batch_size=args.validate_batch_size, shuffle=False, **kwargs
          )
 
-elif args.dataset == 'celeba':
-    image_root = os.path.join(args.image_root_path, 'img_align_celeba')
-    fileList = os.path.join(args.image_root_path, 'Anno/identity_CelebA.txt')
-    attrLsit = os.path.join(args.image_root_path, 'Anno/list_attr_celeba.txt')
-    loader = torch.utils.data.DataLoader(
-        CelebADataset(root=image_root, fileList=fileList, attrLsit=attrLsit,),
-        batch_size=args.batch_size,
-        shuffle=False,
-        **kwargs
-    )
 
 elif args.dataset == 'webface':
     train_root = os.path.join(args.image_root_path, 'webface_train')
@@ -228,6 +227,9 @@ elif args.dataset == 'webface':
             ])
         ),
         batch_size=args.validate_batch_size, shuffle=False, **kwargs)
+
+    # scheduler_class = scheduler.MultiStepLR
+    # scheduler_kwargs = {'milestones': [8, 14], 'gamma': 0.1}
 
 else:
     pass
@@ -315,6 +317,8 @@ else:
 trainer = Trainer(
         model=model,
         optimizer=optimizer,
+        scheduler_class=scheduler_class,
+        scheduler_kwargs=scheduler_kwargs,
         lr=args.lr,
         criterion=criterion,
         start_epoch=args.start_epoch,
