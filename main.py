@@ -132,7 +132,7 @@ else:
 
 
 kwargs = {'num_workers': args.num_workers,
-          'pin_memory': True} if args.cuda else {}
+          'pin_memory': True if args.cuda else False}
 
 dataset_root = '/data/torchvision/'
 scheduler_class = None
