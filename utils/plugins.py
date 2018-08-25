@@ -124,6 +124,7 @@ class LossMonitor(DataMonitor):
         self.loggerName = ['Training Epoch', 'Validation']
         self.currentLoggerName = self.loggerName[1]
         self.loss = AverageMeter()
+        self.lr = None
 
     def __handle__(self, output, target, loss):
         self.batch_idx += 1
@@ -137,7 +138,7 @@ class LossMonitor(DataMonitor):
             self.currentLoggerName = self.loggerName[0]
 
     def logger(self, e=None, train=True):
-        lr = iter(self.trainer.optimizer.param_groups).__next__()['lr']
+        self.lr = iter(self.trainer.optimizer.param_groups).__next__()['lr']
         if train:
             print('=======================================')
             print('{}\t Epoch: {} [{}/{}]\t'
@@ -148,7 +149,7 @@ class LossMonitor(DataMonitor):
                       e,
                       (self.batch_idx + 1) * self.batch_size,
                       len(self.trainer.train_loader.dataset),
-                      lr,
+                      self.lr,
                       loss=self.loss,
                   ))
         else:
@@ -160,12 +161,12 @@ class LossMonitor(DataMonitor):
                   'LR: {}'
                   .format(
                       self.__current_time__(),
-                      lr,
+                      self.lr,
                       loss=self.loss,
                   ))
 
     def getState(self):
-        State = {'Loss': self.loss.avg}
+        State = {'Loss': self.loss.avg, 'Learning_Rate': self.lr}
         return State
 
     def reset(self):
