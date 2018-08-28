@@ -97,6 +97,16 @@ model_dict = {
     'vgg': vgg_diy,
     'resnet': preactivation_resnet164,
     'sphereface': sphere20,
+    'se_inception_v3': se_inception_v3,
+}
+model_kwargs_dict = {
+    'vgg': {'num_classes': args.num_classes},
+    'resnet': {'num_classes': args.num_classes},
+    'sphereface': {'num_classes': args.num_classes},
+    'se_inception_v3': {
+        'num_classes': args.num_classes,
+        'transform_input': True,
+    },
 }
 
 
@@ -106,16 +116,14 @@ else:
     if args.fine_tune:
         load_pkl = torch.load(args.fine_tune)
         model = model_dict[args.model](
-            num_classes=args.num_classes, cfg=load_pkl['cfg'])
+            **model_kwargs_dict[args.model], cfg=load_pkl['cfg'])
         model.load_state_dict(load_pkl['model_state_dict'])
         if args.teacher_model is not None:
             teacher_model = model_dict[args.model](
-                num_classes=args.num_classes)
+                **model_kwargs_dict[args.model])
             teacher_model.load_state_dict(torch.load(args.teacher_model))
         else:
             pass
-        # model = model_dict[args.model](num_classes=args.num_classes)
-        # model.load_state_dict(load_pkl)
         args.save_path = os.path.join(
             args.save_path,
             'fine_tune',
@@ -123,7 +131,7 @@ else:
             args.dataset,
             current_time)
     else:
-        model = model_dict[args.model](num_classes=args.num_classes)
+        model = model_dict[args.model](**model_kwargs_dict[args.model])
         args.save_path = os.path.join(
             args.save_path,
             args.model,
@@ -132,7 +140,7 @@ else:
 
 
 kwargs = {'num_workers': args.num_workers,
-          'pin_memory': True if args.cuda else False}
+          'pin_memory': True} if args.cuda else {}
 
 dataset_root = '/data/torchvision/'
 scheduler_class = None
@@ -232,7 +240,59 @@ elif args.dataset == 'webface':
     # scheduler_kwargs = {'milestones': [8, 14], 'gamma': 0.1}
 
 else:
-    pass
+    fileRoot = os.path.join(args.image_root_path, 'trainval')
+    trainList = os.path.join(args.image_root_path, 'train.txt')
+    valList = os.path.join(args.image_root_path, 'val.txt')
+    train_T = None
+    val_T = None
+    list_reader = None
+    loader = None
+
+    if args.dataset == 'xuelangR2':
+        train_T = transforms.Compose([
+            transforms.Resize((299, 299)),
+            transforms.RandomCrop(299, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomRotation(90),
+            transforms.ToTensor()
+        ])
+        val_T = transforms.Compose([
+            transforms.Resize((299, 299)),
+            transforms.ToTensor()
+        ])
+
+        def list_reader_func(fileList):
+            imgList = []
+            print(fileList)
+            with open(fileList, 'r') as file:
+                for line in file.readlines():
+                    imgPath1, imgPath2, label = line.strip().split(' ')
+                    imgList.append((' '.join([imgPath1, imgPath2]), int(label)))
+            return imgList
+        list_reader = list_reader_func
+    train_dataset = ImageList(
+        root=fileRoot,
+        fileList=trainList,
+        transform=train_T,
+        list_reader=list_reader,
+        loader=loader
+    )
+    train_dataset.classes = ['class %d' % i for i in range(args.num_classes)]
+    validate_dataset = ImageList(
+        root=fileRoot,
+        fileList=valList,
+        transform=val_T,
+        list_reader=list_reader,
+        loader=loader
+    )
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size, shuffle=True, **kwargs)
+    validate_loader = torch.utils.data.DataLoader(
+        validate_dataset,
+        batch_size=args.validate_batch_size, shuffle=False, **kwargs)
 
 writer = SummaryWriter(log_dir=os.path.join(
     'runs', '|'.join([current_time, args.model, args.dataset])))
@@ -269,6 +329,19 @@ def dataforward(self, data, target):
     loss = self.trainer.criterion(output, target)
     return output, loss
 
+
+def inception_v3_forward(self, data, target):
+    output = self.trainer.model(data)
+    loss_base = self.trainer.criterion(output[0], target)
+    loss_aux = self.trainer.criterion(output[1], target)
+    total_loss = loss_base + 0.4 * loss_aux
+    return output[0], total_loss
+
+dataforward_kwargs = {
+    'train_forward': inception_v3_forward
+    if args.model == 'se_inception_v3' else dataforward,
+    'validation_forward': dataforward}
+
 if args.sr:
     print('\nTraining With LASSO\n')
     args.save_path = os.path.join(args.save_path, 'lasso')
@@ -280,7 +353,7 @@ if args.sr:
                     self.kwargs['penalty'] *
                     torch.sign(
                         m.weight.data))
-    plugins.append(DataForward(dataforward))
+    plugins.append(DataForward(**dataforward_kwargs))
     plugins.append(ModelGradHandler(updateBN, penalty=args.p))
 
 elif args.fine_tune is not None and args.teacher_model is not None:
@@ -312,7 +385,7 @@ elif args.fine_tune is not None and args.teacher_model is not None:
 
 else:
     print('\nNormal Training \n')
-    plugins.append(DataForward(dataforward))
+    plugins.append(DataForward(**dataforward_kwargs))
 
 trainer = Trainer(
         model=model,
