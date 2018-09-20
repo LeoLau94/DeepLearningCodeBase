@@ -6,7 +6,14 @@
 
 **However, we will try to make it more general to handel different jobs such as Object Detection, Semantic Segmentation and so on. \(such a long way to go\)**
 
+*Sorry, I've just reconstructed my codebase and I haven't had time  to rewrite the **ReadMe** yet.*
+
+------
+
+
+
 # Content
+
 + main.py
 + utils/
   - trainer.py
