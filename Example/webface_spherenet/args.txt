@@ -1,0 +1,5 @@
+--model=sphereface
+--dataset=WebFace
+--save-path=/data/leolau/checkpoints
+--epochs=16
+--save-interval=1

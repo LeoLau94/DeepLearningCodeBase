@@ -1,5 +1,5 @@
 # coding=utf-8
-# main.py
+# prune.py
 import os
 import sys
 import torch
@@ -9,6 +9,7 @@ from datetime import datetime
 sys.path.append('/data2/public/PyTorchCodeBase')
 from CodeBase.Trainer import *
 from CodeBase.Utils import *
+from CodeBase.Pruning import *
 current_time = datetime.now().strftime('%b%d_%H-%M-%S')
 
 # Arguments
@@ -52,6 +53,7 @@ trainer = Trainer(
     writer=writer,
     plugins=plugins
     )
-if args.resume is not None:
-    trainer.resume(args.resume)
+trainer.model = pruneVGG16(trainer, args.resume, args.save_path, ratio=0.7)
+if trainer.cuda:
+    trainer.model.cuda()
 trainer.start()

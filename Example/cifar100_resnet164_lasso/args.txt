@@ -1,0 +1,5 @@
+--model=ResNet164_preActivation(LASSO)
+--dataset=CIFAR100
+--save-path=/data/leolau/checkpoints
+--epochs=160
+--save-interval=20

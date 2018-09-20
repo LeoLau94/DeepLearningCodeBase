@@ -1,0 +1,5 @@
+--model=VGG16
+--dataset=CIFAR10
+--save-path=/data/leolau/checkpoints
+--epochs=160
+--save-interval=20

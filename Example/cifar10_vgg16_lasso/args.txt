@@ -1,5 +1,5 @@
---model=VGG16
+--model=VGG16(LASSO)
 --dataset=CIFAR10
 --save-path=/data/leolau/checkpoints
 --epochs=160
---save-interval=1
+--save-interval=20

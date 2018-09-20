@@ -1,0 +1,6 @@
+--model=sphereface
+--dataset=MsCeleb
+--save-path=/data/leolau/checkpoints
+--epochs=5
+--log-interval=5
+--save-interval=1
