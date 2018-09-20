@@ -31,8 +31,8 @@ NUM_WORKERS = 2
 
 LR = 0.01
 MOMENTUM = 0.9
-WEIGHT_DECAY = 0.0001
-LOSS_RATIO =0.5
+WEIGHT_DECAY = 0
+LOSS_RATIO = 0
 
 # initialize a model
 model = vgg_diy(num_classes=NUM_CLASSES)
@@ -95,7 +95,8 @@ validate_loader = torch.utils.data.DataLoader(
 
 
 # schedulers config
-scheduler = lr_scheduler.CosineAnnealingLR(optimizer, 60)
+# scheduler = lr_scheduler.CosineAnnealingLR(optimizer, 60)
+scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[30, 45])
 
 # criterisons config
 criterion = nn.CrossEntropyLoss()
@@ -104,7 +105,7 @@ transfer_criterion = nn.MSELoss()
 # plugins config
 plugins = []
 
-plugins.append(LossMonitor(loggerName='Validation'))
+plugins.append(LossMonitor())
 plugins.append(TopKAccuracy(topk=(1, 5)))
 plugins.append(IterationSummaryMonitor())
 plugins.append(DistributionOfBNMonitor())

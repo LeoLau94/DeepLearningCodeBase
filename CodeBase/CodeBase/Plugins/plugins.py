@@ -132,22 +132,23 @@ class LossMonitor(DataMonitor):
     def logger(self, e=None, train=True):
         self.lr = iter(self.trainer.optimizer.param_groups).__next__()['lr']
         if train:
-            if (self.batch_idx + 1) * self.batch_size <= len(self.trainer.train_loader.dataset):
-                print('=======================================')
-                print('{}\t Epoch: {} [{}/{}]\t'
-                      'Loss: {loss.val:.6f}\t'
-                      'LR: {}'
-                      .format(
-                        self.__current_time__(),
-                        e,
-                        self.batch_idx * self.batch_size,
-                        len(self.trainer.train_loader.dataset),
-                        self.lr,
-                        loss=self.loss,
-                          ))
-            else:
+            print('=======================================')
+            print('{}\t Epoch: {} [{}/{}]\t'
+                  'Loss: {loss.val:.6f}\t'
+                  'LR: {}'
+                  .format(
+                      self.__current_time__(),
+                      e,
+                      self.batch_idx * self.batch_size,
+                      len(self.trainer.train_loader.dataset),
+                      self.lr,
+                      loss=self.loss,
+                  ))
+
+        else:
+            if self.trainer.model.training:
                 print(
-                    '==================Training Epochs Summary=====================')
+                    '==================Training Epoch Summary=====================')
                 print('{}\t'
                       'Loss: {loss.avg:.6f}\t'
                       'LR: {}'
@@ -156,18 +157,17 @@ class LossMonitor(DataMonitor):
                         self.lr,
                         loss=self.loss,
                           ))
-
-        else:
-            print(
-                '==================Validation Summary=====================')
-            print('{}\t'
-                  'Loss: {loss.avg:.6f}\t'
-                  'LR: {}'
-                  .format(
-                      self.__current_time__(),
-                      self.lr,
-                      loss=self.loss,
-                  ))
+            else:
+                print(
+                    '==================Validation Summary=====================')
+                print('{}\t'
+                      'Loss: {loss.avg:.6f}\t'
+                      'LR: {}'
+                      .format(
+                          self.__current_time__(),
+                          self.lr,
+                          loss=self.loss,
+                      ))
 
     def getState(self):
         State = {'Loss': self.loss.avg}
