@@ -1,6 +1,5 @@
 --model=VGG16(Pruned)
 --dataset=CIFAR10
 --save-path=/data/leolau/checkpoints
---resum=/data/leolau/checkpoints/CIFAR10/VGG16(LASSO)/Sep20_04-45-59/best_performance_checkpoint.pkl
 --epochs=60
 --save-interval=20

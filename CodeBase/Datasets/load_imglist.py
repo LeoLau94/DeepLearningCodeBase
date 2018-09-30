@@ -14,12 +14,14 @@ def default_loader(path):
 
 def default_list_reader(fileList):
     imgList = []
+    classes = set()
     print(fileList)
     with open(fileList, 'r') as file:
         for line in file.readlines():
-            imgPath, label = line.strip().split('')
+            imgPath, label = line.strip().split(' ')
+            classes.add(int(label))
             imgList.append((imgPath, int(label)))
-    return imgList
+    return imgList, classes
 
 
 def default_attr_reader(attrlist):
@@ -58,7 +60,7 @@ class ImageList(data.Dataset):
         if list_reader is None:
             list_reader = default_list_reader
         self.root = root
-        self.imgList = list_reader(fileList)
+        self.imgList, self.classes = list_reader(fileList)
         self.transform = transform
         self.loader = loader if loader is not None else default_loader
 

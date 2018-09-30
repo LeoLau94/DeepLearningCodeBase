@@ -6,6 +6,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
 from datetime import datetime
+import torch.optim.lr_scheduler as lr_scheduler
 sys.path.append('/data2/public/PyTorchCodeBase')
 from CodeBase.Trainer import *
 from CodeBase.Utils import *

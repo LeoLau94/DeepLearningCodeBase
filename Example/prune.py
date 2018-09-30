@@ -7,9 +7,8 @@ import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
 from datetime import datetime
 sys.path.append('/data2/public/PyTorchCodeBase')
-from CodeBase.Trainer import *
 from CodeBase.Utils import *
-from CodeBase.Pruning import *
+from CodeBase.Pruning import Pruner
 current_time = datetime.now().strftime('%b%d_%H-%M-%S')
 
 # Arguments
@@ -38,22 +37,14 @@ args.save_path = os.path.join(
 writer = SummaryWriter(log_dir=os.path.join(
     'runs', '[' + ']['.join([current_time, args.model, args.dataset]) + ']'))
 # initialize Trianer
-trainer = Trainer(
+pruner = Pruner(
     model=model,
-    optimizer=optimizer,
-    scheduler=scheduler,
-    criterion=criterion,
-    epochs=args.epochs,
     cuda=args.cuda,
-    log_interval=args.log_interval,
-    save_interval=args.save_interval,
-    train_loader=train_loader,
-    validate_loader=validate_loader,
     root=args.save_path,
-    writer=writer,
+    validate_loader=validate_loader,
+    criterion=criterion,
+    preprocess_method=preprocess_method,
+    transfer_method=transfer_method,
     plugins=plugins
-    )
-trainer.model = pruneVGG16(trainer, args.resume, args.save_path, ratio=0.7)
-if trainer.cuda:
-    trainer.model.cuda()
-trainer.start()
+)
+pruner.prune(PRUNE_RATIO)

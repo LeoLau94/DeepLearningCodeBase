@@ -1,0 +1,5 @@
+--model=ResNet164_preActivation(Pruned)
+--dataset=CIFAR100
+--save-path=/data/leolau/checkpoints
+--epochs=60
+--save-interval=20

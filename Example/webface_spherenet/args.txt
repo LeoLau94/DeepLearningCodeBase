@@ -2,4 +2,5 @@
 --dataset=WebFace
 --save-path=/data/leolau/checkpoints
 --epochs=16
---save-interval=1
+--log-interval=10
+--save-interval=2

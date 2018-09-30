@@ -45,7 +45,7 @@ others.add_argument(
     type=int,
     default=10,
     metavar='N',
-     help='how often does the trainer save the checkpoint, the unit is epoch')
+    help='how often does the trainer save the checkpoint, the unit is epoch')
 others.add_argument(
     '--resume',
     type=str,

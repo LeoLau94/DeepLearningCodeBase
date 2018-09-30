@@ -11,18 +11,19 @@ __all__ = [
 class Trainer:
 
     def __init__(self, **kwargs):
-        self.model = kwargs['model']
-        self.optimizer = kwargs['optimizer']
-        self.scheduler = kwargs['scheduler']
-        self.criterion = kwargs['criterion']
-        self.start_epoch = 0
-        self.epochs = kwargs['epochs']
-        self.cuda = kwargs['cuda']
-        self.log_interval = kwargs['log_interval']
-        self.save_interval = kwargs['save_interval']
-        self.train_loader = kwargs['train_loader']
-        self.validate_loader = kwargs['validate_loader']
-        self.root = kwargs['root']
+        self.model = kwargs.get('model')
+        self.optimizer = kwargs.get('optimizer')
+        self.scheduler = kwargs.get('scheduler')
+        self.criterion = kwargs.get('criterion')
+        self.start_epoch = 1
+        self.epochs = kwargs.get('epochs', 100)
+        self.cuda = kwargs.get('cuda', True)
+        self.log_interval = kwargs.get('log_interval', 100)
+        self.save_interval = kwargs.get('save_interval', 10)
+        self.train_loader = kwargs.get('train_loader')
+        self.validate_loader = kwargs.get('validate_loader')
+        self.classes = kwargs.get('classes', self.train_loader.dataset.classes)
+        self.root = kwargs.get('root')
         self.plugins = {}
         for name in [
                 'iteration',
@@ -32,10 +33,13 @@ class Trainer:
                 'dataforward']:
             self.plugins.setdefault(name, [])
 
-        for p in kwargs['plugins']:
+        for p in kwargs.get('plugins'):
             p.register(self)
             self.plugins[p.plugin_type].append(p)
-        self.writer = kwargs['writer']
+        self.writer = kwargs.get('writer')
+        if self.cuda:
+            self.model.cuda()
+            print("using gpu: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
 
     def train(self, e):
         self.model.train()
@@ -106,9 +110,6 @@ class Trainer:
         if not os.path.exists(self.root):
             os.makedirs(self.root)
         print(self.model)
-        if self.cuda:
-            self.model.cuda()
-            print("using gpu: {}".format(os.environ['CUDA_VISIBLE_DEVICES']))
         print('-----start training-----\n')
         best_precision = 0
         for e in range(self.start_epoch, self.epochs + 1):
@@ -121,27 +122,22 @@ class Trainer:
 
             top1Acc = validation_results['TopK Accuracy']['Top 1']
             is_best = top1Acc > best_precision
+            training_state = {
+                'start_epoch': e,
+                'epochs': self.epochs,
+                'cuda': self.cuda,
+                'precisin@1': top1Acc.item()
+            }
             if is_best:
                 best_precision = top1Acc
-                training_state = {
-                    'start_epoch': e,
-                    'epochs': self.epochs,
-                    'cuda': self.cuda,
-                    'precision@1': best_precision,
-                }
                 self.save_checkpoint(
                     training_state,
                     is_best
                 )
             if e % self.save_interval == 0:
-                training_state = {
-                    'start_epoch': e,
-                    'epochs': self.epochs,
-                    'cuda': self.cuda,
-                }
                 self.save_checkpoint(
                     training_state,
-                    is_best
+                    False
                 )
 
         print("-----Training Completed-----\n")
@@ -155,18 +151,19 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict()
         }
         if is_best:
-            checkpoint_best = os.path.join(
-                self.root, 'best_precision_checkpoint.pkl')
-            torch.save(state, checkpoint_best)
+            checkpoint = os.path.join(
+                self.root, 'best_performance_checkpoint.pkl')
+            model_params_path = os.path.join(
+                self.root, 'best_performance_model_params.pkl')
             torch.save(
                 self.model.state_dict(),
-                'best_precision_model_params.pkl')
+                model_params_path)
         else:
             checkpoint = os.path.join(
-                self.root, '.'.join(
+                self.root, '.'.join([
                     str(training_state['start_epoch']),
-                    'checkpoint', 'pkl'))
-            torch.save(state, checkpoint)
+                    'checkpoint', 'pkl']))
+        torch.save(state, checkpoint)
 
     def load_checkpoint(self, root, is_resumed=False):
         if os.path.isfile(root):
@@ -180,6 +177,11 @@ class Trainer:
                 self.epochs = checkpoint['training_state_dict']['epochs']
                 self.optimizer.load_state_dict(
                     checkpoint['optimizer_state_dict'])
+                if self.cuda:
+                    for state in self.optimizer.state.values():
+                        for k, v in state.items():
+                            if torch.is_tensor(v):
+                                state[k] = v.cuda()
             return True
         else:
             print("'{}' doesn't exist!".format(root))
@@ -189,7 +191,7 @@ class Trainer:
         if self.load_checkpoint(root, is_resumed=True):
             print('Successfully resume')
         else:
-            print('Failed to resume')
+            raise RuntimeError("Failed to resume")
 
     def adjust_lr_cosine(self, epoch, batch, nBatch):
         T_total = self.epochs * nBatch

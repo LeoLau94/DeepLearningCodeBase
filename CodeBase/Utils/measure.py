@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import numpy as np
-from torch.autograd import Variable
 
 __all__ = ['measure_layer_param', 'measure_layer_flops']
 
@@ -14,7 +12,7 @@ def measure_layer_param(model):
     return total_params
 
 
-def measure_layer_flops(model):
+def measure_layer_flops(model, input_size):
     model.eval()
 
     list_conv = []
@@ -87,10 +85,8 @@ def measure_layer_flops(model):
 
     init_hooks(model)
 
-    input_data = Variable(
-        torch.rand(3, 32, 32).unsqueeze(0),
-        requires_grad=True)
-    output = model(input_data)
+    input_data = torch.rand(input_size).unsqueeze(0)
+    model(input_data)
 
     total_flops = sum(
         list_conv) + sum(list_linear) + sum(list_bn) + sum(list_pooling) + sum(list_relu)

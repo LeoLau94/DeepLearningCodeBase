@@ -94,13 +94,15 @@ class Bottleneck(nn.Module):
 class PreActivationBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels, block_channels,
+    def __init__(self, in_channels, block_channels_1,
+                 block_channels_2,
                  out_channels, stride=1, downsample=None):
         super(PreActivationBlock, self).__init__()
+        assert block_channels_1 == block_channels_2, "block_channels_1 must equal block_channels_2"
         self.bn1 = nn.BatchNorm2d(in_channels)
-        self.conv1 = conv3x3(in_channels, block_channels, stride)
-        self.bn2 = nn.BatchNorm2d(block_channels)
-        self.conv2 = conv3x3(block_channels, out_channels)
+        self.conv1 = conv3x3(in_channels, block_channels_1, stride)
+        self.bn2 = nn.BatchNorm2d(block_channels_1)
+        self.conv2 = conv3x3(block_channels_2, out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
@@ -168,6 +170,7 @@ class PreActivationBottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
+
     def __init__(self, block, layers, num_classes=10, resolution=32):
         super(ResNet, self).__init__()
         self.in_channels = 16
@@ -235,6 +238,7 @@ class ResNet(nn.Module):
 
 
 class PreActivation_ResNet(nn.Module):
+
     def __init__(self, block, layers, num_classes=10,
                  resolution=32, cfgs=None):
         super(PreActivation_ResNet, self).__init__()
@@ -325,13 +329,13 @@ class PreActivation_ResNet(nn.Module):
     def _init_params_(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal(m.weight.data)
+                nn.init.kaiming_normal_(m.weight.data)
                 m.bias.data.zero_()
             elif isinstance(m, nn.BatchNorm2d):
                 m.weight.data.fill_(0.5)
                 m.bias.data.zero_()
             elif isinstance(m, nn.Linear):
-                nn.init.kaiming_normal(m.weight.data)
+                nn.init.kaiming_normal_(m.weight.data)
                 m.bias.data.zero_()
 
     def forward(self, x):
